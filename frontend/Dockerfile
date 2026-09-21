@@ -8,19 +8,20 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM node:20-alpine
 
-ENV PORT=80
+WORKDIR /app
+
+RUN npm install -g serve@14
+
+ENV PORT=3000
 ENV API_URL=http://localhost:8000/api
 
-# Disable default template processing; we write conf in our entrypoint
-RUN rm -f /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist ./dist
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 
-COPY docker-entrypoint.sh /docker-entrypoint-custom.sh
-COPY --from=build /app/dist /usr/share/nginx/html
+RUN chmod +x /app/docker-entrypoint.sh
 
-RUN chmod +x /docker-entrypoint-custom.sh
+EXPOSE 3000
 
-EXPOSE 80
-
-ENTRYPOINT ["/docker-entrypoint-custom.sh"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
