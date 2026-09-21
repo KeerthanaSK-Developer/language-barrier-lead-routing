@@ -39,7 +39,7 @@ services:
     ports:
       - "3000:80"
     environment:
-      BACKEND_UPSTREAM: backend:8000
+      API_URL: http://localhost:8000/api
       PORT: "80"
     depends_on:
       - backend
