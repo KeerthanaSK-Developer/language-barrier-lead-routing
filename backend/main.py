@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client
+from config import FRONTEND_URL, CORS_ORIGINS
 
 from routes.auth_routes import router as auth_router
 from routes.lead_routes import router as lead_router
@@ -13,10 +14,10 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# CORS middleware
+# CORS: cannot use allow_origins=["*"] with allow_credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

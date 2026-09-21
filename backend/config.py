@@ -27,7 +27,20 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@company.com")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
+# Comma-separated extra origins, e.g. https://my-app.up.railway.app
+_extra_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS_ORIGINS = list(dict.fromkeys([
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    *_extra_origins,
+]))
 
 # BD Capacity
 MAX_ACTIVE_LEADS_PER_BD = int(os.getenv("MAX_ACTIVE_LEADS_PER_BD", "3"))
