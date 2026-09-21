@@ -12,18 +12,13 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-RUN npm install -g serve@14
-
 ENV PORT=8080
 ENV API_URL=http://localhost:8000/api
+ENV NODE_ENV=production
 
 COPY --from=build /app/dist ./dist
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-
-RUN chmod +x /app/docker-entrypoint.sh \
-    && chown -R node:node /app
+COPY server.js ./server.js
 
 EXPOSE 8080
 
-USER node
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["node", "server.js"]
