@@ -1,0 +1,37 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# MongoDB
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+DATABASE_NAME = "bd_lead_routing"
+
+# JWT
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY is not set. Add it to backend/.env (see backend/.env.example)."
+    )
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
+
+# Password Generation Pattern
+# Pattern: {name_lower}{last_4_phone}_{random_3_digits}
+PASSWORD_PATTERN = os.getenv("PASSWORD_PATTERN", "name_phone_random")
+PASSWORD_RANDOM_LENGTH = int(os.getenv("PASSWORD_RANDOM_LENGTH", "3"))
+
+# Email Settings
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@company.com")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# BD Capacity
+MAX_ACTIVE_LEADS_PER_BD = int(os.getenv("MAX_ACTIVE_LEADS_PER_BD", "3"))
+
+# Company Settings
+COMPANY_NAME = os.getenv("COMPANY_NAME", "Company")
+COMPANY_DOMAIN = os.getenv("COMPANY_DOMAIN", "company.com")
