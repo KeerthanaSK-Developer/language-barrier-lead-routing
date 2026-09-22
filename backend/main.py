@@ -52,16 +52,16 @@ async def root():
 @app.on_event("startup")
 async def startup_event():
     transport = email_service.transport
-    if transport == "resend":
-        logger.info("Email transport: Resend HTTPS API (Railway-compatible)")
+    if transport == "brevo":
+        logger.info("Email transport: Brevo HTTPS API (Railway-compatible)")
     elif transport == "smtp":
         logger.info(
-            "Email transport: SMTP %s (works locally; blocked on Railway Hobby/Free — set RESEND_API_KEY)",
+            "Email transport: SMTP %s (works locally; blocked on Railway Hobby/Free — set BREVO_API_KEY)",
             email_service.smtp_host,
         )
     else:
         logger.warning(
-            "Email not configured — set RESEND_API_KEY (recommended on Railway) "
+            "Email not configured — set BREVO_API_KEY (recommended on Railway) "
             "or SMTP_USER/SMTP_PASSWORD. Emails will be skipped."
         )
 

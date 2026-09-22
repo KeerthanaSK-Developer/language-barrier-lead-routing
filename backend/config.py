@@ -22,14 +22,15 @@ PASSWORD_PATTERN = os.getenv("PASSWORD_PATTERN", "name_phone_random")
 PASSWORD_RANDOM_LENGTH = int(os.getenv("PASSWORD_RANDOM_LENGTH", "3"))
 
 # Email Settings
-# Railway Hobby/Free blocks outbound SMTP — use RESEND_API_KEY (HTTPS) in production.
-# Local Docker can keep using Gmail SMTP.
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+# Railway Hobby/Free blocks outbound SMTP — use BREVO_API_KEY (HTTPS) in production.
+# Priority: BREVO_API_KEY > SMTP (local only).
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "").strip()
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@company.com")
+FROM_NAME = os.getenv("FROM_NAME", "").strip() or os.getenv("COMPANY_NAME", "Company")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
 
 # Comma-separated extra origins, e.g. https://my-app.up.railway.app

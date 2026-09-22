@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
-    RESEND_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
-    FROM_EMAIL, FRONTEND_URL, COMPANY_NAME
+    BREVO_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+    FROM_EMAIL, FROM_NAME, FRONTEND_URL, COMPANY_NAME
 )
 
 logger = logging.getLogger(__name__)
@@ -17,22 +17,23 @@ logger = logging.getLogger(__name__)
 # without a timeout and would freeze the whole API (async routes + sync SMTP).
 _email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="email")
 SMTP_TIMEOUT_SECONDS = 15
-RESEND_API_URL = "https://api.resend.com/emails"
+BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 
 class EmailService:
     def __init__(self):
-        self.resend_api_key = RESEND_API_KEY
+        self.brevo_api_key = BREVO_API_KEY
         self.smtp_host = SMTP_HOST
         self.smtp_port = SMTP_PORT
         self.smtp_user = SMTP_USER
         self.smtp_password = SMTP_PASSWORD
         self.from_email = FROM_EMAIL
+        self.from_name = FROM_NAME or COMPANY_NAME
 
     @property
     def transport(self) -> str:
-        if self.resend_api_key:
-            return "resend"
+        if self.brevo_api_key:
+            return "brevo"
         if self.smtp_user and self.smtp_password:
             return "smtp"
         return "none"
@@ -46,25 +47,29 @@ class EmailService:
             logger.warning("Email not configured; skipping send to %s", to_email)
             return False
 
-        if self.transport == "resend":
-            return self._send_via_resend(to_email, subject, html_content)
+        if self.transport == "brevo":
+            return self._send_via_brevo(to_email, subject, html_content)
         return self._send_via_smtp(to_email, subject, html_content)
 
-    def _send_via_resend(self, to_email: str, subject: str, html_content: str) -> bool:
-        """HTTPS email API — works on all Railway plans (SMTP is Hobby-blocked)."""
+    def _send_via_brevo(self, to_email: str, subject: str, html_content: str) -> bool:
+        """HTTPS transactional API — works on Railway Hobby (SMTP is blocked)."""
         payload = {
-            "from": f"{COMPANY_NAME} <{self.from_email}>",
-            "to": [to_email],
+            "sender": {
+                "name": self.from_name,
+                "email": self.from_email,
+            },
+            "to": [{"email": to_email}],
             "subject": subject,
-            "html": html_content,
+            "htmlContent": html_content,
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            RESEND_API_URL,
+            BREVO_API_URL,
             data=data,
             method="POST",
             headers={
-                "Authorization": f"Bearer {self.resend_api_key}",
+                "api-key": self.brevo_api_key,
+                "accept": "application/json",
                 "Content-Type": "application/json",
                 "User-Agent": "bd-lead-routing/1.0",
             },
@@ -72,21 +77,21 @@ class EmailService:
         try:
             with urllib.request.urlopen(req, timeout=SMTP_TIMEOUT_SECONDS) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
-                logger.info("Resend accepted email to %s: %s", to_email, body[:200])
+                logger.info("Brevo accepted email to %s: %s", to_email, body[:200])
                 return True
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
-            logger.error("Resend failed to %s: HTTP %s %s", to_email, e.code, err_body)
+            logger.error("Brevo failed to %s: HTTP %s %s", to_email, e.code, err_body)
             return False
         except Exception as e:
-            logger.error("Resend failed to %s: %s", to_email, e)
+            logger.error("Brevo failed to %s: %s", to_email, e)
             return False
 
     def _send_via_smtp(self, to_email: str, subject: str, html_content: str) -> bool:
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
-            msg["From"] = self.from_email
+            msg["From"] = f"{self.from_name} <{self.from_email}>"
             msg["To"] = to_email
 
             html_part = MIMEText(html_content, "html")
