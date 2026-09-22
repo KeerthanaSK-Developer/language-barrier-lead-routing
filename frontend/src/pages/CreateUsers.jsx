@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { authAPI } from '../services/api';
 import BulkCsvUpload from '../components/BulkCsvUpload';
+import CopyNotice from '../components/CopyNotice';
 import { Spinner } from '../components/Spinner';
 import { getErrorMessage } from '../utils/errors';
 import { UserPlus, Upload, Mail, AlertCircle } from 'lucide-react';
@@ -21,6 +22,7 @@ const CreateUsers = () => {
   const [otherLanguage, setOtherLanguage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const [credentialNotice, setCredentialNotice] = useState(null);
 
   const availableLanguages = ['English', 'Tamil', 'Hindi', 'Telugu', 'Spanish', 'French', 'German', 'Kannada', 'Malayalam'];
 
@@ -57,20 +59,17 @@ const CreateUsers = () => {
       const response = await authAPI.createUser(payload);
       const assigned = response.data.assigned_leads_count || 0;
       const password = response.data.initial_password;
-      const emailQueued = response.data.email_sent;
-      let msg = 'User created!';
+      const email = response.data.email || payload.email;
+      setCredentialNotice({
+        name: payload.name,
+        email,
+        password,
+      });
+      let msg = 'User created. Copy the password below — it stays for 1 minute.';
       if (formData.role === 'bd' && assigned > 0) {
         msg += ` ${assigned} matching pending lead(s) assigned.`;
       }
-      if (password) {
-        msg += ` Temporary password: ${password}`;
-      }
-      if (emailQueued) {
-        msg += ` Credentials email queued to ${formData.email}.`;
-      } else {
-        msg += ' Email was not queued — check server email config (RESEND_API_KEY on Railway).';
-      }
-      toast.success(msg, { duration: 12000 });
+      toast.success(msg);
       setShowCreateModal(false);
       resetForm();
     } catch (error) {
@@ -98,11 +97,15 @@ const CreateUsers = () => {
       supported_languages: roleNorm === 'bd' ? supported_languages : [],
     };
 
-    await authAPI.createUser(payload);
+    const response = await authAPI.createUser(payload);
+    const password = response.data.initial_password || '';
     return {
       reason: 'Created successfully',
+      copyText: password,
+      copyLabel: 'Copy password',
       data: {
         ...payload,
+        password,
         supported_languages: supported_languages.join('|'),
       },
     };
@@ -141,9 +144,23 @@ const CreateUsers = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">User Management</h1>
         <p className="text-gray-500 mt-1 text-sm sm:text-base">
-          Create Admin and BD users - passwords auto-generated and sent via email
+          Create Admin and BD users. The password is shown here for 1 minute so you can copy it.
         </p>
       </div>
+
+      {credentialNotice && (
+        <CopyNotice
+          title={`Password for ${credentialNotice.name}`}
+          hint="Copy this password and share it directly."
+          lines={[
+            { label: 'Email', value: credentialNotice.email },
+            { label: 'Password', value: credentialNotice.password },
+          ]}
+          copyText={credentialNotice.password}
+          copyLabel="Copy password"
+          onExpire={() => setCredentialNotice(null)}
+        />
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div className="card hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setShowCreateModal(true)}>
@@ -303,7 +320,7 @@ const CreateUsers = () => {
                   <Mail className="w-4 h-4 text-blue-600" />
                   <span className="text-sm font-medium text-blue-900">Password Auto-Generated</span>
                 </div>
-                <p className="text-xs text-blue-700">System will generate and email credentials automatically</p>
+                <p className="text-xs text-blue-700">Shown on screen for 1 minute after creation so you can copy it</p>
               </div>
               
               <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4">
@@ -360,6 +377,7 @@ const CreateUsers = () => {
             { key: 'phone', label: 'phone' },
             { key: 'role', label: 'role' },
             { key: 'supported_languages', label: 'supported_languages' },
+            { key: 'password', label: 'password' },
             { key: 'status', label: 'status' },
             { key: 'reason', label: 'reason' },
           ]}

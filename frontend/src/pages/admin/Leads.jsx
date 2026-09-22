@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { leadsAPI, bdsAPI } from '../../services/api';
 import BulkCsvUpload from '../../components/BulkCsvUpload';
+import CopyNotice from '../../components/CopyNotice';
 import Pagination from '../../components/Pagination';
 import { Spinner, PageLoader } from '../../components/Spinner';
 import { getErrorMessage } from '../../utils/errors';
@@ -31,6 +32,7 @@ const AdminLeads = () => {
     phone: '',
     preferred_language: ''
   });
+  const [leadNotice, setLeadNotice] = useState(null);
 
   const fetchLeads = useCallback(async (isRefresh = false, pageOverride, sizeOverride) => {
     const p = pageOverride ?? page;
@@ -84,11 +86,21 @@ const AdminLeads = () => {
     try {
       setCreating(true);
       const response = await leadsAPI.create(formData);
+      const routed = Boolean(response.data.routing?.routed);
+      const bdName = response.data.routing?.bd_name || '';
+      const notice = {
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        language: formData.preferred_language.trim(),
+        bdName: routed ? bdName : '',
+      };
+      setLeadNotice(notice);
 
-      if (response.data.routing?.routed) {
-        toast.success(`Lead created and auto-routed to ${response.data.routing.bd_name}`);
+      if (routed) {
+        toast.success(`Lead created and auto-routed to ${bdName}. Copy the details below.`);
       } else {
-        toast.error('Lead created but no BD available - added to pending');
+        toast.error('Lead created but no BD available. Details stay on screen for 1 minute.');
       }
 
       setShowModal(false);
@@ -110,11 +122,16 @@ const AdminLeads = () => {
     try {
       setAssigning(true);
       const res = await leadsAPI.manualAssign(assignLead.id, selectedBdId);
-      if (res.data.warning) {
-        toast.success(`Assigned (note: ${res.data.warning})`);
-      } else {
-        toast.success(res.data.message || 'Lead assigned');
-      }
+      const bd = bds.find((item) => item.bd_id === selectedBdId);
+      setLeadNotice({
+        name: assignLead.name || assignLead.lead_name || '',
+        email: assignLead.email || '',
+        phone: assignLead.phone || '',
+        language: assignLead.preferred_language || '',
+        bdName: bd?.name || 'BD',
+      });
+      const note = res.data.warning ? ` (${res.data.warning})` : '';
+      toast.success(`Assigned to ${bd?.name || 'BD'}${note}. Copy the details below.`);
       setAssignLead(null);
       setSelectedBdId('');
       fetchLeads();
@@ -136,10 +153,19 @@ const AdminLeads = () => {
       preferred_language: (preferred_language || '').trim(),
     };
     const response = await leadsAPI.create(payload);
-    const reason = response.data.routing?.routed
-      ? `Created & assigned to ${response.data.routing.bd_name}`
+    const routed = Boolean(response.data.routing?.routed);
+    const bdName = response.data.routing?.bd_name || '';
+    const reason = routed
+      ? `Created & assigned to ${bdName}`
       : (response.data.routing?.reason || 'Created (pending assignment)');
-    return { reason, data: payload };
+    const copyText = [
+      `Name: ${payload.name}`,
+      `Email: ${payload.email}`,
+      `Phone: ${payload.phone}`,
+      `Language: ${payload.preferred_language}`,
+      `Assigned BD: ${routed ? bdName : 'pending'}`,
+    ].join('\n');
+    return { reason, data: payload, copyText, copyLabel: 'Copy details' };
   };
 
   const getStatusBadge = (status) => {
@@ -197,6 +223,29 @@ const AdminLeads = () => {
           </button>
         </div>
       </div>
+
+      {leadNotice && (
+        <CopyNotice
+          title={leadNotice.bdName ? `Lead assigned to ${leadNotice.bdName}` : 'Lead created — not assigned yet'}
+          hint="Copy these details and send them to the BD."
+          lines={[
+            { label: 'Name', value: leadNotice.name },
+            { label: 'Email', value: leadNotice.email },
+            { label: 'Phone', value: leadNotice.phone },
+            { label: 'Language', value: leadNotice.language },
+            { label: 'Assigned BD', value: leadNotice.bdName || 'Pending' },
+          ]}
+          copyText={[
+            `Name: ${leadNotice.name}`,
+            `Email: ${leadNotice.email}`,
+            `Phone: ${leadNotice.phone}`,
+            `Language: ${leadNotice.language}`,
+            `Assigned BD: ${leadNotice.bdName || 'Pending'}`,
+          ].join('\n')}
+          copyLabel="Copy details"
+          onExpire={() => setLeadNotice(null)}
+        />
+      )}
 
       <div className="card overflow-hidden p-0">
         <div className="table-wrap">

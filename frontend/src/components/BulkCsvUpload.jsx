@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Upload, Download, CheckCircle, XCircle, Loader2, Ban } from 'lucide-react';
+import { Upload, Download, CheckCircle, XCircle, Loader2, Ban, Copy, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../utils/errors';
 
@@ -27,6 +27,7 @@ const BulkCsvUpload = ({
   const [progress, setProgress] = useState([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
+  const [copiedRow, setCopiedRow] = useState(null);
 
   const parseCsv = (text) => {
     const lines = text
@@ -135,6 +136,8 @@ const BulkCsvUpload = ({
           status,
           reason: result?.reason || (status === 'other' ? 'Skipped — email already exists' : 'Created successfully'),
           data: result?.data || rowData,
+          copyText: result?.copyText || '',
+          copyLabel: result?.copyLabel || 'Copy',
         };
         results.push(entry);
         setProgress((prev) => {
@@ -195,6 +198,16 @@ const BulkCsvUpload = ({
     a.download = `${title.replace(/\s+/g, '_').toLowerCase()}_results.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const copyRow = async (item) => {
+    try {
+      await navigator.clipboard.writeText(item.copyText);
+      setCopiedRow(item.row);
+      toast.success('Copied');
+    } catch {
+      toast.error('Could not copy. Select the text instead.');
+    }
   };
 
   const created = progress.filter((p) => p.status === 'created').length;
@@ -279,6 +292,11 @@ const BulkCsvUpload = ({
                 Other: <span className="text-amber-600 font-medium">{other}</span>
                 {' · '}
                 Failed: <span className="text-red-600 font-medium">{failed}</span>
+                {progress.some((item) => item.copyText) && (
+                  <span className="block text-amber-800 mt-1">
+                    Copy each value before you close this window. The results CSV includes them too.
+                  </span>
+                )}
               </p>
             )}
           </div>
@@ -307,6 +325,21 @@ const BulkCsvUpload = ({
                   <p className={`text-xs ${reasonClass(item.status)}`}>
                     {item.reason}
                   </p>
+                  {item.copyText && (
+                    <div className="mt-1 flex items-start gap-2">
+                      <pre className="text-xs font-mono text-gray-900 bg-white border border-gray-200 rounded px-2 py-1 whitespace-pre-wrap break-all flex-1">
+                        {item.copyText}
+                      </pre>
+                      <button
+                        type="button"
+                        onClick={() => copyRow(item)}
+                        className="text-primary-600 hover:text-primary-700 text-xs font-medium flex items-center gap-1 flex-shrink-0"
+                      >
+                        {copiedRow === item.row ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedRow === item.row ? 'Copied' : (item.copyLabel || 'Copy')}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
