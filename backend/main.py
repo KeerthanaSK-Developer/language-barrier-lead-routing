@@ -1,12 +1,17 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import client
 from config import FRONTEND_URL, CORS_ORIGINS
+from services.email_service import email_service
 
 from routes.auth_routes import router as auth_router
 from routes.lead_routes import router as lead_router
 from routes.bd_routes import router as bd_router
 from routes.dashboard_routes import router as dashboard_router
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="BD Lead Routing System",
@@ -43,6 +48,18 @@ async def root():
             "capacity_management": True
         }
     }
+
+@app.on_event("startup")
+async def startup_event():
+    if email_service.is_configured:
+        logger.info("SMTP configured (%s); emails will send in background", email_service.smtp_host)
+    else:
+        logger.warning(
+            "SMTP_USER/SMTP_PASSWORD missing or empty in container env — "
+            "emails will be skipped. After editing backend/.env run: "
+            "docker compose up -d --force-recreate backend"
+        )
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

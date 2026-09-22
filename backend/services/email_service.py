@@ -1,10 +1,20 @@
+import logging
 import smtplib
+from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
     FROM_EMAIL, FRONTEND_URL, COMPANY_NAME
 )
+
+logger = logging.getLogger(__name__)
+
+# Keep email off the request/event-loop path. SMTP can hang for minutes
+# without a timeout and would freeze the whole API (async routes + sync SMTP).
+_email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="smtp")
+SMTP_TIMEOUT_SECONDS = 15
+
 
 class EmailService:
     def __init__(self):
@@ -13,31 +23,54 @@ class EmailService:
         self.smtp_user = SMTP_USER
         self.smtp_password = SMTP_PASSWORD
         self.from_email = FROM_EMAIL
-    
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.smtp_user and self.smtp_password)
+
     def send_email(self, to_email: str, subject: str, html_content: str) -> bool:
+        if not self.is_configured:
+            logger.warning("SMTP not configured; skipping email to %s", to_email)
+            return False
+
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
             msg["From"] = self.from_email
             msg["To"] = to_email
-            
+
             html_part = MIMEText(html_content, "html")
             msg.attach(html_part)
-            
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=SMTP_TIMEOUT_SECONDS) as server:
                 server.starttls()
                 server.login(self.smtp_user, self.smtp_password)
                 server.sendmail(self.from_email, to_email, msg.as_string())
-            
+
             return True
         except Exception as e:
-            print(f"Email sending failed: {str(e)}")
+            logger.error("Email sending failed to %s: %s", to_email, e)
             return False
-    
+
+    def send_email_background(self, to_email: str, subject: str, html_content: str) -> bool:
+        """Queue email send; never blocks the caller. Returns False if SMTP is not configured."""
+        if not self.is_configured:
+            logger.warning("SMTP not configured; skipping email to %s", to_email)
+            return False
+
+        def _run():
+            try:
+                self.send_email(to_email, subject, html_content)
+            except Exception as e:
+                logger.error("Background email failed to %s: %s", to_email, e)
+
+        _email_executor.submit(_run)
+        return True
+
     def send_user_credentials(self, user_name: str, user_email: str, initial_password: str) -> bool:
-        """Send login credentials to newly created user."""
+        """Queue login credentials email (non-blocking)."""
         subject = f"Welcome to {COMPANY_NAME} - Your Account Details"
-        
+
         html_content = f"""
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -64,14 +97,14 @@ class EmailService:
         </body>
         </html>
         """
-        
-        return self.send_email(user_email, subject, html_content)
-    
-    def send_lead_assignment_notification(self, bd_name: str, bd_email: str, lead_name: str, 
+
+        return self.send_email_background(user_email, subject, html_content)
+
+    def send_lead_assignment_notification(self, bd_name: str, bd_email: str, lead_name: str,
                                           lead_email: str, lead_phone: str, language: str, assigned_at: str) -> bool:
-        """Send lead assignment notification to BD."""
+        """Queue lead-assignment notification (non-blocking)."""
         subject = f"New Lead Assigned: {lead_name}"
-        
+
         html_content = f"""
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -99,8 +132,9 @@ class EmailService:
         </body>
         </html>
         """
-        
-        return self.send_email(bd_email, subject, html_content)
+
+        return self.send_email_background(bd_email, subject, html_content)
+
 
 # Global instance
 email_service = EmailService()

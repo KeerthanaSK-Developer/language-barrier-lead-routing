@@ -233,18 +233,13 @@ async def bulk_upload_users(
             else:
                 assigned_leads = []
 
-            try:
-                email_service.send_user_credentials(
-                    user_name=name,
-                    user_email=email,
-                    initial_password=password
-                )
-                email_sent = True
-            except Exception as e:
-                logger.error(f"Email send failed: {str(e)}")
-                email_sent = False
+            email_queued = email_service.send_user_credentials(
+                user_name=name,
+                user_email=email,
+                initial_password=password
+            )
 
-            reason = "Created" + (" (email sent)" if email_sent else " (email failed)")
+            reason = "Created" + (" (email queued)" if email_queued else " (email skipped)")
             if role == "bd" and assigned_leads:
                 reason += f" · assigned {len(assigned_leads)} pending lead(s)"
 

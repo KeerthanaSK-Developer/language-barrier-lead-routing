@@ -133,25 +133,20 @@ async def create_user(
         # Assign pending / reclaim mismatched leads that match this BD's languages
         assigned_leads = lead_routing_service.fill_capacity_for_bd(user_id)
     
-    # Send email with credentials
-    try:
-        email_service.send_user_credentials(
-            user_name=user_data.name,
-            user_email=email,
-            initial_password=password
-        )
-        email_sent = True
-    except Exception as e:
-        logger.error(f"Failed to send email: {str(e)}")
-        email_sent = False
-    
+    # Queue credentials email in background (SMTP must not block the API)
+    email_queued = email_service.send_user_credentials(
+        user_name=user_data.name,
+        user_email=email,
+        initial_password=password
+    )
+
     return {
         "message": "User created successfully",
         "user_id": user_id,
         "name": user_data.name,
         "email": email,
         "initial_password": password,  # Remove in production
-        "email_sent": email_sent,
+        "email_sent": email_queued,
         "assigned_leads_count": len(assigned_leads),
         "assigned_leads": assigned_leads,
     }
