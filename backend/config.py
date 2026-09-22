@@ -22,6 +22,9 @@ PASSWORD_PATTERN = os.getenv("PASSWORD_PATTERN", "name_phone_random")
 PASSWORD_RANDOM_LENGTH = int(os.getenv("PASSWORD_RANDOM_LENGTH", "3"))
 
 # Email Settings
+# Railway Hobby/Free blocks outbound SMTP — use RESEND_API_KEY (HTTPS) in production.
+# Local Docker can keep using Gmail SMTP.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")

@@ -1,10 +1,13 @@
+import json
 import logging
 import smtplib
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
-    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+    RESEND_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
     FROM_EMAIL, FRONTEND_URL, COMPANY_NAME
 )
 
@@ -12,12 +15,14 @@ logger = logging.getLogger(__name__)
 
 # Keep email off the request/event-loop path. SMTP can hang for minutes
 # without a timeout and would freeze the whole API (async routes + sync SMTP).
-_email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="smtp")
+_email_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="email")
 SMTP_TIMEOUT_SECONDS = 15
+RESEND_API_URL = "https://api.resend.com/emails"
 
 
 class EmailService:
     def __init__(self):
+        self.resend_api_key = RESEND_API_KEY
         self.smtp_host = SMTP_HOST
         self.smtp_port = SMTP_PORT
         self.smtp_user = SMTP_USER
@@ -25,14 +30,58 @@ class EmailService:
         self.from_email = FROM_EMAIL
 
     @property
+    def transport(self) -> str:
+        if self.resend_api_key:
+            return "resend"
+        if self.smtp_user and self.smtp_password:
+            return "smtp"
+        return "none"
+
+    @property
     def is_configured(self) -> bool:
-        return bool(self.smtp_user and self.smtp_password)
+        return self.transport != "none"
 
     def send_email(self, to_email: str, subject: str, html_content: str) -> bool:
         if not self.is_configured:
-            logger.warning("SMTP not configured; skipping email to %s", to_email)
+            logger.warning("Email not configured; skipping send to %s", to_email)
             return False
 
+        if self.transport == "resend":
+            return self._send_via_resend(to_email, subject, html_content)
+        return self._send_via_smtp(to_email, subject, html_content)
+
+    def _send_via_resend(self, to_email: str, subject: str, html_content: str) -> bool:
+        """HTTPS email API — works on all Railway plans (SMTP is Hobby-blocked)."""
+        payload = {
+            "from": f"{COMPANY_NAME} <{self.from_email}>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            RESEND_API_URL,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.resend_api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=SMTP_TIMEOUT_SECONDS) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                logger.info("Resend accepted email to %s: %s", to_email, body[:200])
+                return True
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            logger.error("Resend failed to %s: HTTP %s %s", to_email, e.code, err_body)
+            return False
+        except Exception as e:
+            logger.error("Resend failed to %s: %s", to_email, e)
+            return False
+
+    def _send_via_smtp(self, to_email: str, subject: str, html_content: str) -> bool:
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
@@ -47,15 +96,16 @@ class EmailService:
                 server.login(self.smtp_user, self.smtp_password)
                 server.sendmail(self.from_email, to_email, msg.as_string())
 
+            logger.info("SMTP accepted email to %s", to_email)
             return True
         except Exception as e:
-            logger.error("Email sending failed to %s: %s", to_email, e)
+            logger.error("SMTP failed to %s: %s", to_email, e)
             return False
 
     def send_email_background(self, to_email: str, subject: str, html_content: str) -> bool:
-        """Queue email send; never blocks the caller. Returns False if SMTP is not configured."""
+        """Queue email send; never blocks the caller. Returns False if not configured."""
         if not self.is_configured:
-            logger.warning("SMTP not configured; skipping email to %s", to_email)
+            logger.warning("Email not configured; skipping email to %s", to_email)
             return False
 
         def _run():

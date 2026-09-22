@@ -51,13 +51,18 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    if email_service.is_configured:
-        logger.info("SMTP configured (%s); emails will send in background", email_service.smtp_host)
+    transport = email_service.transport
+    if transport == "resend":
+        logger.info("Email transport: Resend HTTPS API (Railway-compatible)")
+    elif transport == "smtp":
+        logger.info(
+            "Email transport: SMTP %s (works locally; blocked on Railway Hobby/Free — set RESEND_API_KEY)",
+            email_service.smtp_host,
+        )
     else:
         logger.warning(
-            "SMTP_USER/SMTP_PASSWORD missing or empty in container env — "
-            "emails will be skipped. After editing backend/.env run: "
-            "docker compose up -d --force-recreate backend"
+            "Email not configured — set RESEND_API_KEY (recommended on Railway) "
+            "or SMTP_USER/SMTP_PASSWORD. Emails will be skipped."
         )
 
 

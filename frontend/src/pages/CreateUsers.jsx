@@ -56,11 +56,21 @@ const CreateUsers = () => {
       const payload = { ...formData, supported_languages: langs };
       const response = await authAPI.createUser(payload);
       const assigned = response.data.assigned_leads_count || 0;
+      const password = response.data.initial_password;
+      const emailQueued = response.data.email_sent;
+      let msg = 'User created!';
       if (formData.role === 'bd' && assigned > 0) {
-        toast.success(`User created! ${assigned} matching pending lead(s) assigned. Credentials sent to ${formData.email}`);
-      } else {
-        toast.success(`User created! Credentials sent to ${formData.email}`);
+        msg += ` ${assigned} matching pending lead(s) assigned.`;
       }
+      if (password) {
+        msg += ` Temporary password: ${password}`;
+      }
+      if (emailQueued) {
+        msg += ` Credentials email queued to ${formData.email}.`;
+      } else {
+        msg += ' Email was not queued — check server email config (RESEND_API_KEY on Railway).';
+      }
+      toast.success(msg, { duration: 12000 });
       setShowCreateModal(false);
       resetForm();
     } catch (error) {
