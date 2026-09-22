@@ -66,6 +66,7 @@ class EmailService:
             headers={
                 "Authorization": f"Bearer {self.resend_api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "bd-lead-routing/1.0",
             },
         )
         try:
