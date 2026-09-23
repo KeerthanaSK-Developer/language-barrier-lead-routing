@@ -120,7 +120,7 @@ const BDLeads = () => {
                       <p className="font-medium text-gray-900">{lead.phone || '-'}</p>
                     </div>
                     <div>
-                      <p className="text-gray-500">Language</p>
+                      <p className="text-gray-500">Preferred language</p>
                       <p className="font-medium text-gray-900">{lead.preferred_language}</p>
                     </div>
                     <div>
@@ -128,6 +128,27 @@ const BDLeads = () => {
                       <p className="font-medium text-gray-900">{formatDate(lead.assigned_at)}</p>
                     </div>
                   </div>
+                  {(lead.transcriptedLanguages || []).length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs text-gray-500 mb-1">Call Transcripted language</p>
+                      <div className="flex flex-wrap gap-1">
+                        {lead.transcriptedLanguages.map((lang) => (
+                          <span key={lang} className="badge badge-warning">{lang}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {lead.transcriptionData?.transcript && (
+                    <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                      <p className="text-xs font-medium text-gray-500 mb-1">
+                        Call transcript
+                        {lead.transcriptionData.callId ? ` · ${lead.transcriptionData.callId}` : ''}
+                      </p>
+                      <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans">
+                        {lead.transcriptionData.transcript}
+                      </pre>
+                    </div>
+                  )}
                 </div>
 
                 {lead.status !== 'completed' && (

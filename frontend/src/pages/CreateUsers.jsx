@@ -15,7 +15,8 @@ const CreateUsers = () => {
     email: '',
     phone: '',
     role: 'bd',
-    supported_languages: []
+    supported_languages: [],
+    transcription: '',
   });
   const [languages, setLanguages] = useState([]);
   const [showOther, setShowOther] = useState(false);
@@ -27,7 +28,7 @@ const CreateUsers = () => {
   const availableLanguages = ['English', 'Tamil', 'Hindi', 'Telugu', 'Spanish', 'French', 'German', 'Kannada', 'Malayalam'];
 
   const resetForm = () => {
-    setFormData({ name: '', email: '', phone: '', role: 'bd', supported_languages: [] });
+    setFormData({ name: '', email: '', phone: '', role: 'bd', supported_languages: [], transcription: '' });
     setLanguages([]);
     setShowOther(false);
     setOtherLanguage('');
@@ -49,13 +50,17 @@ const CreateUsers = () => {
       const exists = langs.some((l) => l.toLowerCase() === pending.toLowerCase());
       if (!exists) langs = [...langs, pending];
     }
-    if (formData.role === 'bd' && langs.length === 0) {
-      setFormError('BD users require at least one supported language');
+    if (formData.role === 'bd' && langs.length === 0 && !formData.transcription.trim()) {
+      setFormError('BD users require at least one language and/or a call transcription');
       return;
     }
     try {
       setSubmitting(true);
-      const payload = { ...formData, supported_languages: langs };
+      const payload = {
+        ...formData,
+        supported_languages: langs,
+        transcription: formData.transcription.trim() || null,
+      };
       const response = await authAPI.createUser(payload);
       const assigned = response.data.assigned_leads_count || 0;
       const password = response.data.initial_password;
@@ -82,12 +87,17 @@ const CreateUsers = () => {
   };
 
   const processUserRow = async (row) => {
-    const [name, email, phone, role, langsRaw = ''] = row;
+    const [name, email, phone, role, langsRaw = '', transcription = ''] = row;
     const roleNorm = (role || '').trim().toLowerCase();
     const supported_languages = String(langsRaw)
       .split(/[|;]/)
       .map((l) => l.trim())
       .filter(Boolean);
+    const transcript = String(transcription || '').trim();
+
+    if (roleNorm === 'bd' && supported_languages.length === 0 && !transcript) {
+      throw new Error('BD requires language and/or transcription');
+    }
 
     const payload = {
       name: (name || '').trim(),
@@ -95,10 +105,12 @@ const CreateUsers = () => {
       phone: (phone || '').trim(),
       role: roleNorm,
       supported_languages: roleNorm === 'bd' ? supported_languages : [],
+      transcription: roleNorm === 'bd' ? (transcript || null) : null,
     };
 
     const response = await authAPI.createUser(payload);
     const password = response.data.initial_password || '';
+    const finalLangs = response.data.supported_languages || supported_languages;
     return {
       reason: 'Created successfully',
       copyText: password,
@@ -106,7 +118,7 @@ const CreateUsers = () => {
       data: {
         ...payload,
         password,
-        supported_languages: supported_languages.join('|'),
+        supported_languages: Array.isArray(finalLangs) ? finalLangs.join('|') : String(finalLangs || ''),
       },
     };
   };
@@ -247,7 +259,9 @@ const CreateUsers = () => {
               
               {formData.role === 'bd' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Supported Languages *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Supported Languages <span className="text-gray-400 font-normal">(or transcription below)</span>
+                  </label>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {availableLanguages.map((lang) => (
                       <button
@@ -314,6 +328,24 @@ const CreateUsers = () => {
                   )}
                 </div>
               )}
+
+              {formData.role === 'bd' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Sample call transcription <span className="text-gray-400 font-normal">(optional if languages set)</span>
+                  </label>
+                  <textarea
+                    value={formData.transcription}
+                    onChange={(e) => setFormData({ ...formData, transcription: e.target.value })}
+                    className="input-field min-h-[90px]"
+                    placeholder={"Agent: Hello...\nLearner: Vanakkam..."}
+                    disabled={submitting}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    AI detects languages from the transcript and merges them into supported languages.
+                  </p>
+                </div>
+              )}
               
               <div className="bg-blue-50 p-3 rounded-lg">
                 <div className="flex items-center gap-2 mb-1">
@@ -363,11 +395,13 @@ const CreateUsers = () => {
             { key: 'email', label: 'email' },
             { key: 'phone', label: 'phone' },
             { key: 'role', label: 'role (admin|bd)' },
-            { key: 'supported_languages', label: 'supported_languages (use | )' },
+            { key: 'supported_languages', label: 'supported_languages (optional if transcription)' },
+            { key: 'transcription', label: 'transcription (optional if languages)' },
           ]}
           exampleRows={[
-            ['Arun Kumar', 'arun@company.com', '9876543210', 'bd', 'Tamil|English'],
-            ['Admin User', 'admin2@company.com', '9876543211', 'admin', ''],
+            ['Arun Kumar', 'arun@company.com', '9876543210', 'bd', 'Tamil|English', ''],
+            ['Priya', 'priya@company.com', '9876543212', 'bd', '', 'Agent: Hello\nLearner: Vanakkam'],
+            ['Admin User', 'admin2@company.com', '9876543211', 'admin', '', ''],
           ]}
           processRow={processUserRow}
           resultColumns={[

@@ -9,6 +9,7 @@ from auth import get_current_user, get_current_admin_user
 from services.password_service import password_service
 from services.email_service import email_service
 from services.routing_service import lead_routing_service
+from services.ai_service import resolve_languages_with_transcript
 from bson import ObjectId
 import logging
 import re
@@ -93,12 +94,26 @@ async def create_user(
             detail=f"Email already exists as {existing_role}"
         )
     
-    # Generate password
-    if user_data.role.value == "bd" and not user_data.supported_languages:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="BD users require at least one supported language"
-        )
+    # BD: language list and/or transcription required; AI merges detected languages
+    supported_languages = list(user_data.supported_languages or [])
+    if user_data.role.value == "bd":
+        try:
+            raw_tx = user_data.transcriptionData if user_data.transcriptionData is not None else user_data.transcription
+            resolved = resolve_languages_with_transcript(
+                explicit_languages=supported_languages,
+                transcription=raw_tx,
+                require_any=True,
+            )
+            supported_languages = resolved["languages"]
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+        if not supported_languages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="BD users require language and/or transcription",
+            )
 
     password = password_service.generate_password(user_data.name, user_data.phone)
     hashed_password = pwd_context.hash(password)
@@ -109,7 +124,7 @@ async def create_user(
         "phone": user_data.phone,
         "role": user_data.role.value,
         "password": hashed_password,
-        "supported_languages": user_data.supported_languages,
+        "supported_languages": supported_languages if user_data.role.value == "bd" else [],
         "status": "active",
         "created_at": datetime.utcnow()
     }
@@ -125,7 +140,7 @@ async def create_user(
             "name": user_data.name,
             "email": email,
             "phone": user_data.phone,
-            "supported_languages": user_data.supported_languages,
+            "supported_languages": supported_languages,
             "active_lead_count": 0,
             "status": "active",
             "availability": True
@@ -147,6 +162,7 @@ async def create_user(
         "email": email,
         "initial_password": password,  # Remove in production
         "email_sent": email_queued,
+        "supported_languages": supported_languages if user_data.role.value == "bd" else [],
         "assigned_leads_count": len(assigned_leads),
         "assigned_leads": assigned_leads,
     }

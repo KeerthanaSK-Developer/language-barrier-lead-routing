@@ -52,3 +52,10 @@ MAX_ACTIVE_LEADS_PER_BD = int(os.getenv("MAX_ACTIVE_LEADS_PER_BD", "3"))
 # Company Settings
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Company")
 COMPANY_DOMAIN = os.getenv("COMPANY_DOMAIN", "company.com")
+
+# AI (OpenAI-compatible — Hyrenet / Claude). Used for transcript language detection.
+# Do not use Bedrock.
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://ai.hyrenet-staging.in/v1").rstrip("/")
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_MODEL = os.getenv("AI_MODEL", "global.anthropic.claude-sonnet-4-6").strip()
+AI_TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "45"))

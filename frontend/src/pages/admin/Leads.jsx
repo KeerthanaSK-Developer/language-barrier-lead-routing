@@ -30,9 +30,11 @@ const AdminLeads = () => {
     name: '',
     email: '',
     phone: '',
-    preferred_language: ''
+    preferred_language: '',
+    transcription: '',
   });
   const [leadNotice, setLeadNotice] = useState(null);
+  const [detailLead, setDetailLead] = useState(null);
 
   const fetchLeads = useCallback(async (isRefresh = false, pageOverride, sizeOverride) => {
     const p = pageOverride ?? page;
@@ -83,16 +85,38 @@ const AdminLeads = () => {
   const handleCreateLead = async (e) => {
     e.preventDefault();
     setFormError('');
+    const language = formData.preferred_language.trim();
+    const transcription = formData.transcription.trim();
+    if (!language && !transcription) {
+      setFormError('Provide preferred language and/or call transcription');
+      return;
+    }
     try {
       setCreating(true);
-      const response = await leadsAPI.create(formData);
-      const routed = Boolean(response.data.routing?.routed);
-      const bdName = response.data.routing?.bd_name || '';
-      const notice = {
+      const payload = {
         name: formData.name.trim(),
         email: formData.email.trim(),
         phone: formData.phone.trim(),
-        language: formData.preferred_language.trim(),
+        preferred_language: language || null,
+        transcriptionData: transcription
+          ? {
+              callId: '',
+              source: 'transcript_content',
+              transcript: transcription,
+            }
+          : null,
+      };
+      const response = await leadsAPI.create(payload);
+      const routed = Boolean(response.data.routing?.routed);
+      const bdName = response.data.routing?.bd_name || '';
+      const resolvedLang = response.data.lead?.preferred_language || language;
+      const transcripted = response.data.lead?.transcriptedLanguages || [];
+      const notice = {
+        name: payload.name,
+        email: payload.email,
+        phone: payload.phone,
+        language: resolvedLang,
+        transcripted: transcripted.join(', ') || '—',
         bdName: routed ? bdName : '',
       };
       setLeadNotice(notice);
@@ -104,7 +128,7 @@ const AdminLeads = () => {
       }
 
       setShowModal(false);
-      setFormData({ name: '', email: '', phone: '', preferred_language: '' });
+      setFormData({ name: '', email: '', phone: '', preferred_language: '', transcription: '' });
       fetchLeads();
     } catch (error) {
       const msg = getErrorMessage(error, 'Failed to create lead');
@@ -145,16 +169,27 @@ const AdminLeads = () => {
   };
 
   const processLeadRow = async (row) => {
-    const [name, email, phone, preferred_language] = row;
+    const [name, email, phone, preferred_language = '', transcription = ''] = row;
+    const language = (preferred_language || '').trim();
+    const transcript = String(transcription || '')
+      .trim()
+      .replace(/\\n/g, '\n');
+    if (!language && !transcript) {
+      throw new Error('Provide preferred_language and/or transcription');
+    }
     const payload = {
       name: (name || '').trim(),
       email: (email || '').trim(),
       phone: (phone || '').trim(),
-      preferred_language: (preferred_language || '').trim(),
+      preferred_language: language || null,
+      transcriptionData: transcript
+        ? { callId: '', source: 'transcript_content', transcript }
+        : null,
     };
     const response = await leadsAPI.create(payload);
     const routed = Boolean(response.data.routing?.routed);
     const bdName = response.data.routing?.bd_name || '';
+    const resolvedLang = response.data.lead?.preferred_language || language || 'detected';
     const reason = routed
       ? `Created & assigned to ${bdName}`
       : (response.data.routing?.reason || 'Created (pending assignment)');
@@ -162,10 +197,15 @@ const AdminLeads = () => {
       `Name: ${payload.name}`,
       `Email: ${payload.email}`,
       `Phone: ${payload.phone}`,
-      `Language: ${payload.preferred_language}`,
+      `Language: ${resolvedLang}`,
       `Assigned BD: ${routed ? bdName : 'pending'}`,
     ].join('\n');
-    return { reason, data: payload, copyText, copyLabel: 'Copy details' };
+    return {
+      reason,
+      data: { ...payload, preferred_language: resolvedLang },
+      copyText,
+      copyLabel: 'Copy details',
+    };
   };
 
   const getStatusBadge = (status) => {
@@ -233,6 +273,7 @@ const AdminLeads = () => {
             { label: 'Email', value: leadNotice.email },
             { label: 'Phone', value: leadNotice.phone },
             { label: 'Language', value: leadNotice.language },
+            { label: 'Call Transcripted language', value: leadNotice.transcripted || '—' },
             { label: 'Assigned BD', value: leadNotice.bdName || 'Pending' },
           ]}
           copyText={[
@@ -240,6 +281,7 @@ const AdminLeads = () => {
             `Email: ${leadNotice.email}`,
             `Phone: ${leadNotice.phone}`,
             `Language: ${leadNotice.language}`,
+            `Call Transcripted language: ${leadNotice.transcripted || '—'}`,
             `Assigned BD: ${leadNotice.bdName || 'Pending'}`,
           ].join('\n')}
           copyLabel="Copy details"
@@ -256,6 +298,7 @@ const AdminLeads = () => {
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Email</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Contact</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Language</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Call Transcripted Language</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Assigned BD</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Status</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Action</th>
@@ -264,18 +307,37 @@ const AdminLeads = () => {
             <tbody>
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="py-8 text-center text-gray-500">
+                  <td colSpan="8" className="py-8 text-center text-gray-500">
                     No leads found
                   </td>
                 </tr>
               ) : (
                 leads.map((lead) => (
                   <tr key={lead.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 font-medium text-gray-900">{lead.name || lead.lead_name}</td>
+                    <td className="py-3 px-4 font-medium text-gray-900">
+                      <button
+                        type="button"
+                        className="text-left text-primary-700 hover:underline font-medium"
+                        onClick={() => setDetailLead(lead)}
+                      >
+                        {lead.name || lead.lead_name}
+                      </button>
+                    </td>
                     <td className="py-3 px-4 text-gray-600">{lead.email || '-'}</td>
                     <td className="py-3 px-4 text-gray-600">{lead.phone || '-'}</td>
                     <td className="py-3 px-4">
-                      <span className="badge badge-info">{lead.preferred_language}</span>
+                      <span className="badge badge-info">{lead.preferred_language || '-'}</span>
+                    </td>
+                    <td className="py-3 px-4">
+                      {(lead.transcriptedLanguages || []).length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {lead.transcriptedLanguages.map((lang) => (
+                            <span key={lang} className="badge badge-warning">{lang}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 text-sm">—</span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-gray-600">
                       {lead.assigned_bd_name || <span className="text-gray-400 italic">Unassigned</span>}
@@ -316,6 +378,73 @@ const AdminLeads = () => {
           disabled={loading || refreshing}
         />
       </div>
+
+      {detailLead && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {detailLead.name || detailLead.lead_name}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">{detailLead.email}</p>
+              </div>
+              <button type="button" className="btn-secondary" onClick={() => setDetailLead(null)}>
+                Close
+              </button>
+            </div>
+            <dl className="space-y-3 text-sm">
+              <div>
+                <dt className="text-gray-500">Contact</dt>
+                <dd className="font-medium text-gray-900">{detailLead.phone || '-'}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Preferred language</dt>
+                <dd>
+                  <span className="badge badge-info">{detailLead.preferred_language || '-'}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500 mb-1">Call Transcripted language</dt>
+                <dd className="flex flex-wrap gap-1">
+                  {(detailLead.transcriptedLanguages || []).length > 0 ? (
+                    detailLead.transcriptedLanguages.map((lang) => (
+                      <span key={lang} className="badge badge-warning">{lang}</span>
+                    ))
+                  ) : (
+                    <span className="text-gray-400">None detected</span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Status</dt>
+                <dd>
+                  <span className={`badge ${getStatusBadge(detailLead.status)}`}>{detailLead.status}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-gray-500">Assigned BD</dt>
+                <dd className="font-medium text-gray-900">{detailLead.assigned_bd_name || 'Unassigned'}</dd>
+              </div>
+              {detailLead.transcriptionData?.transcript && (
+                <div>
+                  <dt className="text-gray-500 mb-1">
+                    Call transcript
+                    {detailLead.transcriptionData.callId
+                      ? ` · ${detailLead.transcriptionData.callId}`
+                      : ''}
+                  </dt>
+                  <dd className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans">
+                      {detailLead.transcriptionData.transcript}
+                    </pre>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
@@ -361,16 +490,32 @@ const AdminLeads = () => {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Preferred Language *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Preferred Language <span className="text-gray-400 font-normal">(or transcription below)</span>
+                </label>
                 <input
                   type="text"
                   value={formData.preferred_language}
                   onChange={(e) => setFormData({ ...formData, preferred_language: e.target.value })}
                   className="input-field"
-                  placeholder="Any language (e.g. Tamil, Japanese, Mandarin)"
-                  required
+                  placeholder="e.g. Tamil, Hindi, English"
                   disabled={creating}
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Call transcription <span className="text-gray-400 font-normal">(optional if language set)</span>
+                </label>
+                <textarea
+                  value={formData.transcription}
+                  onChange={(e) => setFormData({ ...formData, transcription: e.target.value })}
+                  className="input-field min-h-[100px]"
+                  placeholder={"Agent: Good morning...\nLearner: Vanakkam..."}
+                  disabled={creating}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  AI detects language from the transcript if language is empty or mixed.
+                </p>
               </div>
               <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4">
                 <button
@@ -473,11 +618,12 @@ const AdminLeads = () => {
             { key: 'name', label: 'name' },
             { key: 'email', label: 'email' },
             { key: 'phone', label: 'contact number' },
-            { key: 'preferred_language', label: 'preferred_language (any text)' },
+            { key: 'preferred_language', label: 'preferred_language (optional if transcription)' },
+            { key: 'transcription', label: 'transcription (Agent:\\nLearner — optional if language)' },
           ]}
           exampleRows={[
-            ['Ravi Krishnan', 'ravi@example.com', '9876543210', 'Tamil'],
-            ['Yuki Tanaka', 'yuki@example.com', '9123456780', 'Japanese'],
+            ['Ravi Krishnan', 'ravi@example.com', '9876543210', 'Tamil', ''],
+            ['Yuki Tanaka', 'yuki@example.com', '9123456780', '', 'Agent: Hello\nLearner: Vanakkam'],
           ]}
           processRow={processLeadRow}
           resultColumns={[

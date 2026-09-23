@@ -30,30 +30,62 @@ const BulkCsvUpload = ({
   const [copiedRow, setCopiedRow] = useState(null);
 
   const parseCsv = (text) => {
-    const lines = text
-      .replace(/^\uFEFF/, '')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
+    // RFC-style parse: commas/newlines inside "..." stay in the same cell/row.
+    const input = String(text || '').replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [];
+    let current = '';
+    let inQuotes = false;
 
-    return lines.map((line) => {
-      const cells = [];
-      let current = '';
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') {
-          inQuotes = !inQuotes;
-        } else if (ch === ',' && !inQuotes) {
-          cells.push(current.trim());
-          current = '';
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+      const next = input[i + 1];
+
+      if (inQuotes) {
+        if (ch === '"' && next === '"') {
+          current += '"';
+          i += 1;
+        } else if (ch === '"') {
+          inQuotes = false;
         } else {
           current += ch;
         }
+        continue;
       }
-      cells.push(current.trim());
-      return cells;
-    });
+
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(current.trim());
+        current = '';
+      } else if (ch === '\n') {
+        row.push(current.trim());
+        current = '';
+        if (row.some((cell) => cell !== '')) rows.push(row);
+        row = [];
+      } else if (ch === '\r') {
+        // handle CRLF / CR
+        if (next === '\n') i += 1;
+        row.push(current.trim());
+        current = '';
+        if (row.some((cell) => cell !== '')) rows.push(row);
+        row = [];
+      } else {
+        current += ch;
+      }
+    }
+
+    row.push(current.trim());
+    if (row.some((cell) => cell !== '')) rows.push(row);
+
+    // Skip header row if present (name,email,...)
+    if (rows.length > 0) {
+      const first = rows[0].map((c) => String(c || '').toLowerCase());
+      if (first[0] === 'name' && (first[1] === 'email' || first.includes('email'))) {
+        return rows.slice(1);
+      }
+    }
+    return rows;
   };
 
   const isDuplicateError = (err, reasonText) => {
@@ -236,7 +268,8 @@ const BulkCsvUpload = ({
       <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-3xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6">
         <h2 className="text-lg sm:text-xl font-semibold mb-2">{title}</h2>
         <p className="text-sm text-gray-600 mb-4">
-          Upload a CSV file <strong>without a header row</strong>. Follow this column order:
+          Upload a CSV file. A header row is OK (it will be skipped). Follow this column order.
+          Put the full call transcript in one cell (quotes around it if it has commas or line breaks).
         </p>
 
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4 overflow-x-auto">

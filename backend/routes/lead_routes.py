@@ -5,9 +5,10 @@ from database import leads_collection, bds_collection, pending_leads_collection,
 from models import LeadCreate, LeadUpdate
 from auth import get_current_user, get_current_admin_user, get_current_bd_user
 from services.routing_service import lead_routing_service, _bd_speaks
+from services.ai_service import resolve_languages_with_transcript, normalize_language_name
 from utils.pagination import get_pagination, skip_limit, paginated
 from pydantic import ValidationError
-from typing import List, Tuple
+from typing import List, Tuple, Any, Optional
 import re
 import logging
 
@@ -18,15 +19,46 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^[\d+\-\s()]{7,20}$")
 
 
-def _validate_lead_fields(name: str, email: str, phone: str, preferred_language: str):
+def _validate_lead_identity(name: str, email: str, phone: str):
     if not name or not name.strip():
         raise ValueError("Name is required")
     if not email or not EMAIL_RE.match(email.strip()):
         raise ValueError("Invalid email")
     if not phone or not PHONE_RE.match(phone.strip()):
         raise ValueError("Invalid contact number")
-    if not preferred_language or not preferred_language.strip():
-        raise ValueError("Language is required")
+
+
+def _resolve_lead_language_and_transcript(
+    preferred_language: Optional[str],
+    transcription: Any = None,
+    transcription_data: Any = None,
+) -> tuple:
+    """
+    Returns (preferred_language, transcriptionData, transcriptedLanguages).
+    transcriptedLanguages = languages detected from the call transcript (may be empty).
+    preferred_language = explicit language, else first detected.
+    """
+    explicit = [preferred_language] if (preferred_language or "").strip() else []
+    raw_tx = transcription_data if transcription_data is not None else transcription
+    if hasattr(raw_tx, "dict"):
+        raw_tx = raw_tx.dict()
+    resolved = resolve_languages_with_transcript(
+        explicit_languages=explicit,
+        transcription=raw_tx,
+        require_any=True,
+    )
+    languages = resolved["languages"]
+    detected = resolved.get("detected") or []
+    if not languages:
+        raise ValueError("Provide preferred_language and/or transcription")
+    # Explicit language wins as primary for routing; else first detected
+    if explicit:
+        primary = normalize_language_name(explicit[0])
+    else:
+        primary = languages[0]
+    # Detected from transcript only (not the manually entered preferred language)
+    transcripted = [normalize_language_name(l) for l in detected if normalize_language_name(l)]
+    return primary, resolved["transcriptionData"], transcripted
 
 
 @router.get("/")
@@ -81,37 +113,48 @@ async def create_lead(
     lead: LeadCreate,
     current_user: dict = Depends(get_current_admin_user)
 ):
-    """Create single lead and auto-route."""
+    """Create single lead and auto-route. Requires language and/or transcription."""
     try:
-        _validate_lead_fields(lead.name, lead.email, lead.phone, lead.preferred_language)
+        _validate_lead_identity(lead.name, lead.email, lead.phone)
+        preferred_language, transcription_data, transcripted_languages = _resolve_lead_language_and_transcript(
+            lead.preferred_language,
+            transcription=lead.transcription,
+            transcription_data=lead.transcriptionData,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
     # Duplicate email check (case-insensitive)
     email_norm = lead.email.lower().strip()
     if leads_collection.find_one({"email": {"$regex": f"^{re.escape(email_norm)}$", "$options": "i"}}):
         raise HTTPException(status_code=409, detail="Email already exists")
 
-    lead_dict = lead.dict()
-    lead_dict["name"] = lead_dict["name"].strip()
-    lead_dict["email"] = email_norm
-    lead_dict["phone"] = lead_dict["phone"].strip()
-    lead_dict["preferred_language"] = lead_dict["preferred_language"].strip()
-    lead_dict["status"] = "new"
-    lead_dict["assigned_bd"] = None
-    lead_dict["created_at"] = datetime.utcnow()
-    lead_dict["assigned_at"] = None
-    lead_dict["completed_at"] = None
+    lead_dict = {
+        "name": lead.name.strip(),
+        "email": email_norm,
+        "phone": lead.phone.strip(),
+        "preferred_language": preferred_language,
+        "transcriptedLanguages": transcripted_languages,
+        "transcriptionData": transcription_data,
+        "status": "new",
+        "assigned_bd": None,
+        "created_at": datetime.utcnow(),
+        "assigned_at": None,
+        "completed_at": None,
+    }
     
     result = leads_collection.insert_one(lead_dict)
     lead_id = str(result.inserted_id)
     
     routing_result = lead_routing_service.route_new_lead(
         lead_id=lead_id,
-        language=lead_dict["preferred_language"],
+        language=preferred_language,
         lead_name=lead_dict["name"],
         lead_email=lead_dict["email"],
         lead_phone=lead_dict["phone"],
+        languages=transcripted_languages,
     )
     
     created_lead = serialize_doc(leads_collection.find_one({"_id": ObjectId(lead_id)}))
@@ -134,26 +177,37 @@ async def bulk_upload_leads(
 ):
     """
     Bulk upload leads from rows (no CSV header).
-    Expected row order: name, email, phone, preferred_language
+    Expected: name, email, phone, preferred_language, transcription(optional)
+    Language and/or transcription required per row.
     """
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
-        raise HTTPException(status_code=400, detail="Provide rows: [[name, email, phone, language], ...]")
+        raise HTTPException(
+            status_code=400,
+            detail="Provide rows: [[name, email, phone, language, transcription], ...]",
+        )
 
     successful = []
     failed = []
 
     for index, row in enumerate(rows, start=1):
         try:
-            if not isinstance(row, (list, tuple)) or len(row) < 4:
-                raise ValueError("Expected 4 columns: name, email, phone, preferred_language")
+            if not isinstance(row, (list, tuple)) or len(row) < 3:
+                raise ValueError(
+                    "Expected columns: name, email, phone, preferred_language, transcription"
+                )
 
             name = str(row[0]).strip()
             email = str(row[1]).strip().lower()
             phone = str(row[2]).strip()
-            preferred_language = str(row[3]).strip()
+            preferred_language = str(row[3]).strip() if len(row) > 3 else ""
+            transcription = str(row[4]).strip() if len(row) > 4 else ""
 
-            _validate_lead_fields(name, email, phone, preferred_language)
+            _validate_lead_identity(name, email, phone)
+            preferred_language, transcription_data, transcripted_languages = _resolve_lead_language_and_transcript(
+                preferred_language,
+                transcription=transcription or None,
+            )
 
             if leads_collection.find_one({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}}):
                 raise ValueError("Email already exists")
@@ -163,6 +217,8 @@ async def bulk_upload_leads(
                 "email": email,
                 "phone": phone,
                 "preferred_language": preferred_language,
+                "transcriptedLanguages": transcripted_languages,
+                "transcriptionData": transcription_data,
                 "status": "new",
                 "assigned_bd": None,
                 "created_at": datetime.utcnow(),
@@ -179,6 +235,7 @@ async def bulk_upload_leads(
                 lead_name=name,
                 lead_email=email,
                 lead_phone=phone,
+                languages=transcripted_languages,
             )
 
             successful.append({

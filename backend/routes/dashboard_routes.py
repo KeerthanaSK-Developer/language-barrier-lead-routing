@@ -7,6 +7,7 @@ from config import MAX_ACTIVE_LEADS_PER_BD
 from services.routing_service import LeadRoutingService, lead_routing_service
 from services.password_service import password_service
 from services.email_service import email_service
+from services.ai_service import resolve_languages_with_transcript
 from models import DashboardStats, BDWorkload
 from utils.pagination import get_pagination, skip_limit, paginated
 from passlib.context import CryptContext
@@ -159,12 +160,16 @@ async def bulk_upload_users(
 ):
     """
     Bulk upload users from rows (no CSV header).
-    Expected row order: name, email, phone, role, supported_languages
+    Expected: name, email, phone, role, supported_languages, transcription(optional)
+    For BD: languages and/or transcription required.
     Languages use | separator, e.g. Tamil|English
     """
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
-        raise HTTPException(status_code=400, detail="Provide rows: [[name, email, phone, role, languages], ...]")
+        raise HTTPException(
+            status_code=400,
+            detail="Provide rows: [[name, email, phone, role, languages, transcription], ...]",
+        )
 
     successful = []
     failed = []
@@ -172,13 +177,16 @@ async def bulk_upload_users(
     for index, row in enumerate(rows, start=1):
         try:
             if not isinstance(row, (list, tuple)) or len(row) < 4:
-                raise ValueError("Expected columns: name, email, phone, role, supported_languages")
+                raise ValueError(
+                    "Expected columns: name, email, phone, role, supported_languages, transcription"
+                )
 
             name = str(row[0]).strip()
             email = str(row[1]).strip().lower()
             phone = str(row[2]).strip()
             role = str(row[3]).strip().lower()
             languages_raw = str(row[4]).strip() if len(row) > 4 else ""
+            transcription = str(row[5]).strip() if len(row) > 5 else ""
 
             if not name:
                 raise ValueError("Name is required")
@@ -190,8 +198,15 @@ async def bulk_upload_users(
                 raise ValueError("Role must be admin or bd")
 
             supported_languages = [l.strip() for l in languages_raw.replace(";", "|").split("|") if l.strip()]
-            if role == "bd" and not supported_languages:
-                raise ValueError("BD users require at least one supported language")
+            if role == "bd":
+                resolved = resolve_languages_with_transcript(
+                    explicit_languages=supported_languages,
+                    transcription=transcription or None,
+                    require_any=True,
+                )
+                supported_languages = resolved["languages"]
+                if not supported_languages:
+                    raise ValueError("BD users require language and/or transcription")
 
             existing = users_collection.find_one({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}})
             if existing:

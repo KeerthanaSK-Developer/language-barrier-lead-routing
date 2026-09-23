@@ -17,15 +17,53 @@ def _bd_speaks(bd: Dict[str, Any], language: str) -> bool:
     return any(_norm_lang(l) == target for l in (bd.get("supported_languages") or []))
 
 
+def _bd_speaks_any(bd: Dict[str, Any], languages: List[str]) -> bool:
+    return any(_bd_speaks(bd, lang) for lang in (languages or []) if _norm_lang(lang))
+
+
+def _merge_lang_list(*groups: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for group in groups:
+        for raw in group or []:
+            name = (raw or "").strip()
+            if not name:
+                continue
+            key = _norm_lang(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+    return out
+
+
+def _languages_for_lead(lead: Dict[str, Any]) -> List[str]:
+    """preferred_language + transcriptedLanguages (for routing / pending match)."""
+    preferred = lead.get("preferred_language")
+    transcripted = lead.get("transcriptedLanguages") or lead.get("transcripted_languages") or []
+    return _merge_lang_list(
+        [preferred] if preferred else [],
+        list(transcripted) if isinstance(transcripted, list) else [],
+    )
+
+
 class LeadRoutingService:
     """Service for automatic lead routing logic."""
     
     @staticmethod
     def find_available_bd(language: str) -> Optional[Dict[str, Any]]:
         """Find the best available BD for a given language (case-insensitive)."""
+        return LeadRoutingService.find_available_bd_for_languages([language] if language else [])
+
+    @staticmethod
+    def find_available_bd_for_languages(languages: List[str]) -> Optional[Dict[str, Any]]:
+        """Find BD who speaks any of the languages, lowest live workload."""
+        langs = _merge_lang_list(languages or [])
+        if not langs:
+            return None
         compatible_bds = [
             bd for bd in bds_collection.find({"status": "active", "availability": True})
-            if _bd_speaks(bd, language)
+            if _bd_speaks_any(bd, langs)
         ]
         
         available_bds = []
@@ -127,19 +165,39 @@ class LeadRoutingService:
             return False
     
     @staticmethod
-    def route_new_lead(lead_id: str, language: str, lead_name: str, lead_email: str = "", lead_phone: str = "") -> Dict[str, Any]:
-        """Route a new lead to an appropriate BD."""
-        available_bd = LeadRoutingService.find_available_bd(language)
+    def route_new_lead(
+        lead_id: str,
+        language: str,
+        lead_name: str,
+        lead_email: str = "",
+        lead_phone: str = "",
+        languages: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Route a new lead to an appropriate BD (preferred + transcripted languages)."""
+        candidate_langs = _merge_lang_list(
+            [language] if language else [],
+            languages or [],
+        )
+        available_bd = LeadRoutingService.find_available_bd_for_languages(candidate_langs)
         
         if available_bd:
             success = LeadRoutingService.assign_lead_to_bd(str(lead_id), available_bd["bd_id"])
             
             if success:
+                matched = [
+                    lang for lang in candidate_langs
+                    if _bd_speaks(available_bd, lang)
+                ]
+                match_note = f" (matched: {', '.join(matched)})" if matched else ""
                 return {
                     "routed": True,
                     "bd_name": available_bd["name"],
                     "bd_id": available_bd["bd_id"],
-                    "reason": f"Automatically assigned to {available_bd['name']} (lowest workload)"
+                    "matched_languages": matched,
+                    "reason": (
+                        f"Automatically assigned to {available_bd['name']} "
+                        f"(lowest workload){match_note}"
+                    ),
                 }
         
         pending_leads_collection.insert_one({
@@ -148,6 +206,10 @@ class LeadRoutingService:
             "email": lead_email,
             "phone": lead_phone,
             "preferred_language": language,
+            "transcriptedLanguages": [
+                lang for lang in candidate_langs
+                if _norm_lang(lang) != _norm_lang(language)
+            ],
             "status": "pending",
             "created_at": datetime.utcnow()
         })
@@ -157,26 +219,33 @@ class LeadRoutingService:
             {"$set": {"status": "pending"}}
         )
         
+        lang_label = ", ".join(candidate_langs) if candidate_langs else language
         return {
             "routed": False,
-            "reason": f"No available BD speaks {language} or all are at full capacity",
+            "reason": f"No available BD speaks {lang_label} or all are at full capacity",
             "status": "pending"
         }
 
     @staticmethod
     def find_mismatched_leads(language: str) -> List[Dict[str, Any]]:
         """
-        Find active leads for `language` that are assigned to a BD who does NOT speak that language
-        (typically from earlier manual assignment when matching BDs were full).
+        Find active leads that include `language` (preferred or transcripted)
+        but are assigned to a BD who does NOT speak that language.
         """
         mismatched = []
+        lang_key = _norm_lang(language)
+        if not lang_key:
+            return mismatched
+
         candidates = leads_collection.find({
-            "preferred_language": language,
             "status": {"$in": ["assigned", "in_progress"]},
             "assigned_bd": {"$ne": None}
         }).sort("assigned_at", 1)
 
         for lead in candidates:
+            langs = _languages_for_lead(lead)
+            if not any(_norm_lang(l) == lang_key for l in langs):
+                continue
             bd = bds_collection.find_one({"bd_id": lead["assigned_bd"]}, {"_id": 0})
             if not bd:
                 mismatched.append(lead)
@@ -252,49 +321,74 @@ class LeadRoutingService:
         """Check pending / unassigned leads and assign to available BDs when capacity opens."""
         assignments = []
         
-        # 1) Pending queue
-        query = {}
+        # 1) Pending queue — match preferred or transcriptedLanguages
         if language:
-            query["preferred_language"] = language
-        
-        pending_leads = list(pending_leads_collection.find(query).sort("created_at", 1))
+            lang_key = _norm_lang(language)
+            pending_leads = []
+            for p in pending_leads_collection.find({}).sort("created_at", 1):
+                langs = _merge_lang_list(
+                    [p.get("preferred_language")] if p.get("preferred_language") else [],
+                    p.get("transcriptedLanguages") or [],
+                )
+                if any(_norm_lang(l) == lang_key for l in langs):
+                    pending_leads.append(p)
+        else:
+            pending_leads = list(pending_leads_collection.find({}).sort("created_at", 1))
 
         # 2) Also unassigned leads in leads collection (new/pending, no BD)
         lead_query = {
             "$or": [{"assigned_bd": None}, {"assigned_bd": {"$exists": False}}],
             "status": {"$in": ["new", "pending"]},
         }
-        if language:
-            lead_query["preferred_language"] = language
 
         seen_ids = {p.get("lead_id") for p in pending_leads}
         for lead in leads_collection.find(lead_query).sort("created_at", 1):
             lid = str(lead["_id"])
             if lid in seen_ids:
                 continue
+            langs = _languages_for_lead(lead)
+            if language:
+                lang_key = _norm_lang(language)
+                if not any(_norm_lang(l) == lang_key for l in langs):
+                    continue
             pending_leads.append({
                 "lead_id": lid,
                 "lead_name": lead.get("name") or lead.get("lead_name", ""),
                 "preferred_language": lead.get("preferred_language"),
+                "transcriptedLanguages": lead.get("transcriptedLanguages") or [],
                 "_id": lead.get("_id"),
             })
             seen_ids.add(lid)
         
         for pending_lead in pending_leads:
-            lead_language = pending_lead["preferred_language"]
             lead_id = pending_lead["lead_id"]
+            # Prefer reading live lead doc for full language set
+            lead_doc = None
+            try:
+                lead_doc = leads_collection.find_one({"_id": ObjectId(lead_id)})
+            except Exception:
+                lead_doc = None
+            candidate_langs = (
+                _languages_for_lead(lead_doc)
+                if lead_doc
+                else _merge_lang_list(
+                    [pending_lead.get("preferred_language")] if pending_lead.get("preferred_language") else [],
+                    pending_lead.get("transcriptedLanguages") or [],
+                )
+            )
+            lead_language = pending_lead.get("preferred_language") or (candidate_langs[0] if candidate_langs else "")
             
             if bd_id:
                 bd = bds_collection.find_one({
                     "bd_id": bd_id,
                     "status": "active",
                 })
-                if bd and _bd_speaks(bd, lead_language) and LeadRoutingService._live_active_count(bd_id) < MAX_ACTIVE_LEADS_PER_BD:
+                if bd and _bd_speaks_any(bd, candidate_langs) and LeadRoutingService._live_active_count(bd_id) < MAX_ACTIVE_LEADS_PER_BD:
                     available_bd = bd
                 else:
-                    available_bd = LeadRoutingService.find_available_bd(lead_language)
+                    available_bd = LeadRoutingService.find_available_bd_for_languages(candidate_langs)
             else:
-                available_bd = LeadRoutingService.find_available_bd(lead_language)
+                available_bd = LeadRoutingService.find_available_bd_for_languages(candidate_langs)
             
             if available_bd:
                 if LeadRoutingService._live_active_count(available_bd["bd_id"]) >= MAX_ACTIVE_LEADS_PER_BD:
@@ -304,12 +398,14 @@ class LeadRoutingService:
                 
                 if success:
                     pending_leads_collection.delete_many({"lead_id": lead_id})
+                    matched = [lang for lang in candidate_langs if _bd_speaks(available_bd, lang)]
                     
                     assignments.append({
                         "lead_id": lead_id,
                         "lead_name": pending_lead.get("name") or pending_lead.get("lead_name", ""),
                         "assigned_to": available_bd["name"],
                         "language": lead_language,
+                        "matched_languages": matched,
                         "type": "pending",
                     })
         

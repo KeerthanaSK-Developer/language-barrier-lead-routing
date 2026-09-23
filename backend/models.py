@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from enum import Enum
 
@@ -31,6 +31,9 @@ class UserCreate(BaseModel):
     phone: str
     role: UserRole
     supported_languages: List[str] = []
+    # Optional call transcript sample — AI detects languages and merges into supported_languages
+    transcription: Optional[str] = None
+    transcriptionData: Optional[dict] = None
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -60,14 +63,24 @@ class Token(BaseModel):
     user: dict
 
 # Lead Models
+class TranscriptionData(BaseModel):
+    callId: str = ""
+    source: str = "transcript_content"
+    transcript: str
+
+
 class LeadBase(BaseModel):
     name: str
     email: EmailStr
     phone: str
-    preferred_language: str
+    preferred_language: Optional[str] = None
+
 
 class LeadCreate(LeadBase):
-    pass
+    # Prefer language and/or call transcription (at least one required)
+    transcription: Optional[str] = None
+    transcriptionData: Optional[Union[TranscriptionData, dict]] = None
+
 
 class LeadUpdate(BaseModel):
     name: Optional[str] = None
@@ -75,11 +88,17 @@ class LeadUpdate(BaseModel):
     phone: Optional[str] = None
     preferred_language: Optional[str] = None
     status: Optional[LeadStatus] = None
+    transcription: Optional[str] = None
+    transcriptionData: Optional[Union[TranscriptionData, dict]] = None
+
 
 class Lead(LeadBase):
     id: str
+    preferred_language: str
     assigned_bd: Optional[str]
     status: LeadStatus
+    transcriptionData: Optional[dict] = None
+    transcriptedLanguages: Optional[List[str]] = None
     created_at: datetime
     assigned_at: Optional[datetime]
     completed_at: Optional[datetime]
