@@ -1,6 +1,30 @@
 # BD Lead Routing System - Startup Guide
 
-## IMPORTANT: First Time Setup
+## Docker (recommended for local work)
+
+Use **Compose Watch** so code changes reload without rebuilding every time:
+
+```bash
+cd bd-lead-routing
+
+# First time (or after Dockerfile / requirements / package.json changes):
+docker compose up --build --watch
+
+# Later sessions (image already built):
+docker compose up --watch
+```
+
+- **Backend**: `uvicorn --reload` — Python edits apply automatically  
+- **Frontend**: Vite HMR — React/CSS edits hot-reload in the browser  
+- Only rebuild when `requirements.txt`, `package.json`, or a Dockerfile changes (watch does that for you)
+
+App: http://localhost:3000 · API: http://localhost:8000
+
+Stop with `Ctrl+C`. If a previous `docker compose` was suspended (`Ctrl+Z`), run `fg` then `Ctrl+C`, or `docker compose down`.
+
+---
+
+## IMPORTANT: First Time Setup (without Docker)
 
 Follow these steps exactly to get the system running.
 

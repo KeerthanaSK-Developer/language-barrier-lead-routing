@@ -26,24 +26,58 @@ services:
     environment:
       MONGODB_URL: mongodb://mongo:27017
       FRONTEND_URL: http://localhost:3000
+    # Live-reload: host code mounts in; uvicorn --reload picks up .py changes
+    command: >
+      uvicorn main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --reload-dir /app
+    volumes:
+      - ./backend:/app
+      - whisper_cache:/root/.cache/huggingface
     depends_on:
       mongo:
         condition: service_healthy
     restart: unless-stopped
+    develop:
+      watch:
+        # Source is bind-mounted; uvicorn --reload handles .py edits.
+        # Rebuild only when deps / image definition change.
+        - action: rebuild
+          path: ./backend/requirements.txt
+        - action: rebuild
+          path: ./backend/Dockerfile
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: bd-lead-frontend
     ports:
-      - "3000:8080"
+      - "3000:3000"
     environment:
       API_URL: http://localhost:8000/api
-      PORT: "8080"
+      # Vite proxy target inside the compose network
+      VITE_PROXY_TARGET: http://backend:8000
+      PORT: "3000"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
     depends_on:
       - backend
     restart: unless-stopped
+    develop:
+      watch:
+        # Source is bind-mounted; Vite HMR handles UI edits.
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+        - action: rebuild
+          path: ./frontend/Dockerfile.dev
 
 volumes:
   mongo_data:
+  whisper_cache:
+  frontend_node_modules:

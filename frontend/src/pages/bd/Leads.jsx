@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { leadsAPI } from '../../services/api';
-import { FileText, CheckCircle, Clock } from 'lucide-react';
+import { FileText, CheckCircle, Clock, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Spinner, PageLoader } from '../../components/Spinner';
 import Pagination from '../../components/Pagination';
+import CallSchedulePanel from '../../components/CallSchedulePanel';
 import { getErrorMessage } from '../../utils/errors';
 
 const BDLeads = () => {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [completingId, setCompletingId] = useState(null);
+  const [reassignId, setReassignId] = useState(null);
+  const [reassignReason, setReassignReason] = useState({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
@@ -29,6 +32,28 @@ const BDLeads = () => {
     }
   }, [page, pageSize]);
 
+  const handleInsightsReady = useCallback(
+    (session) => {
+      if (session?.lead_id && session?.insights) {
+        const insights = session.insights;
+        const langs = insights.languages_detected || [];
+        const patch = {
+          callLanguages: langs,
+          transcriptedLanguages: langs,
+          last_call_insights: insights,
+          call_join_probability: insights.join_probability,
+          call_interest_level: insights.interest_level,
+          call_interested: insights.interested,
+        };
+        setLeads((prev) =>
+          prev.map((l) => (l.id === session.lead_id ? { ...l, ...patch } : l))
+        );
+      }
+      fetchMyLeads();
+    },
+    [fetchMyLeads]
+  );
+
   useEffect(() => {
     setLoading(true);
     fetchMyLeads();
@@ -37,19 +62,8 @@ const BDLeads = () => {
   const handleCompleteLead = async (leadId) => {
     try {
       setCompletingId(leadId);
-      const response = await leadsAPI.complete(leadId);
-      const reclaimed = response.data.reclaimed || [];
-      const assigned = response.data.assigned_leads || [];
-
-      if (reclaimed.length > 0) {
-        const names = reclaimed.map((r) => r.lead_name).join(', ');
-        toast.success(`Lead completed! Reclaimed language-matched lead(s): ${names}`);
-      } else if (response.data.automatically_assigned) {
-        toast.success(`Lead completed! ${assigned.length} pending lead(s) auto-assigned to you.`);
-      } else {
-        toast.success('Lead marked as completed');
-      }
-
+      await leadsAPI.complete(leadId);
+      toast.success('Lead marked as completed');
       await fetchMyLeads();
     } catch (error) {
       toast.error(getErrorMessage(error, 'Failed to complete lead'));
@@ -58,9 +72,33 @@ const BDLeads = () => {
     }
   };
 
+  const handleRequestReassign = async (leadId) => {
+    try {
+      setReassignId(leadId);
+      const reason = (reassignReason[leadId] || '').trim();
+      await leadsAPI.requestReassign(leadId, reason);
+      toast.success('Reassign request sent to admin');
+      await fetchMyLeads();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Failed to request reassign'));
+    } finally {
+      setReassignId(null);
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return '-';
     return new Date(dateString).toLocaleString();
+  };
+
+  const callLangs = (lead) => {
+    const hasCall = Boolean(
+      lead?.last_call_session_id || lead?.last_call_insights?.session_id
+    );
+    if (!hasCall) return [];
+    return lead.callLanguages?.length
+      ? lead.callLanguages
+      : lead.transcriptedLanguages || [];
   };
 
   if (loading) {
@@ -72,7 +110,7 @@ const BDLeads = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">My Leads</h1>
         <p className="text-gray-500 mt-1 text-sm sm:text-base">
-          Manage your assigned leads and mark them as completed
+          Manage assigned leads, schedule calls, and request reassignment when needed
         </p>
       </div>
 
@@ -82,10 +120,10 @@ const BDLeads = () => {
             <Clock className="w-5 h-5 text-blue-600 mt-0.5" />
           </div>
           <div>
-            <p className="text-sm font-medium text-blue-900">Automatic Assignment</p>
+            <p className="text-sm font-medium text-blue-900">Manual assignment</p>
             <p className="text-sm text-blue-700 mt-1">
-              When you complete a lead, the system fills your free slot with pending leads,
-              then reclaims matching-language leads that were manually given to BDs who do not speak that language.
+              New leads are assigned by admin. After a call, AI may flag language barrier or cooperation
+              issues; you can also request reassignment with a reason.
             </p>
           </div>
         </div>
@@ -95,7 +133,7 @@ const BDLeads = () => {
         <div className="card text-center py-12">
           <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" />
           <p className="text-gray-500 text-lg">No active leads assigned</p>
-          <p className="text-gray-400 text-sm mt-2">You'll be automatically notified when a new lead is assigned</p>
+          <p className="text-gray-400 text-sm mt-2">Ask admin to assign a lead to you</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -108,6 +146,9 @@ const BDLeads = () => {
                     <span className={`badge ${lead.status === 'completed' ? 'badge-success' : 'badge-info'}`}>
                       {lead.status}
                     </span>
+                    {lead.reassign_requested && (
+                      <span className="badge badge-warning">Reassign pending</span>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 text-sm mb-1">
@@ -121,34 +162,63 @@ const BDLeads = () => {
                     </div>
                     <div>
                       <p className="text-gray-500">Preferred language</p>
-                      <p className="font-medium text-gray-900">{lead.preferred_language}</p>
+                      <p className="font-medium text-gray-900">{lead.preferred_language || '—'}</p>
                     </div>
                     <div>
                       <p className="text-gray-500">Assigned</p>
                       <p className="font-medium text-gray-900">{formatDate(lead.assigned_at)}</p>
                     </div>
                   </div>
-                  {(lead.transcriptedLanguages || []).length > 0 && (
+
+                  {callLangs(lead).length > 0 && (
                     <div className="mt-2">
-                      <p className="text-xs text-gray-500 mb-1">Call Transcripted language</p>
+                      <p className="text-xs text-gray-500 mb-1">Call language</p>
                       <div className="flex flex-wrap gap-1">
-                        {lead.transcriptedLanguages.map((lang) => (
+                        {callLangs(lead).map((lang) => (
                           <span key={lang} className="badge badge-warning">{lang}</span>
                         ))}
                       </div>
                     </div>
                   )}
-                  {lead.transcriptionData?.transcript && (
-                    <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                      <p className="text-xs font-medium text-gray-500 mb-1">
-                        Call transcript
-                        {lead.transcriptionData.callId ? ` · ${lead.transcriptionData.callId}` : ''}
-                      </p>
-                      <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans">
-                        {lead.transcriptionData.transcript}
-                      </pre>
+
+                  {lead.reassign_requested ? (
+                    <div className="mt-3 p-2 rounded border border-amber-200 bg-amber-50 text-xs text-amber-900 flex gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>
+                        Reassign requested
+                        {lead.reassign_reason ? `: ${lead.reassign_reason}` : ''}
+                        {' — waiting for admin'}
+                      </span>
+                    </div>
+                  ) : lead.status !== 'completed' && (
+                    <div className="mt-3 p-3 rounded border border-gray-200 bg-gray-50">
+                      <p className="text-xs font-medium text-gray-700 mb-1">Request reassign</p>
+                      <textarea
+                        className="input-field text-sm min-h-[64px]"
+                        placeholder="Reason (language mismatch, need help, etc.)"
+                        value={reassignReason[lead.id] || ''}
+                        onChange={(e) =>
+                          setReassignReason((prev) => ({ ...prev, [lead.id]: e.target.value }))
+                        }
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRequestReassign(lead.id)}
+                        disabled={reassignId === lead.id}
+                        className="btn-secondary text-xs mt-2 inline-flex items-center gap-1"
+                      >
+                        {reassignId === lead.id ? <Spinner /> : null}
+                        Request reassign
+                      </button>
                     </div>
                   )}
+
+                  <CallSchedulePanel
+                    leadId={lead.id}
+                    leadName={lead.name || lead.lead_name}
+                    onInsightsReady={handleInsightsReady}
+                    showAiInsights={false}
+                  />
                 </div>
 
                 {lead.status !== 'completed' && (

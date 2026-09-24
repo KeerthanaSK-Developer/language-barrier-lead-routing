@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   UserPlus,
   Lock,
+  Sparkles,
 } from 'lucide-react';
 
 const AdminLayout = ({ children }) => {
@@ -27,6 +28,12 @@ const AdminLayout = ({ children }) => {
       label: 'Awaiting Assignment',
       description: 'Unassigned & manual assign',
       icon: AlertTriangle,
+    },
+    {
+      path: '/admin/ai-insights',
+      label: 'AI how it works',
+      description: 'Pipeline & demo scenarios',
+      icon: Sparkles,
     },
     {
       path: '/admin/users',

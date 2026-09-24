@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import AdminDashboard from './pages/admin/Dashboard';
 import AdminLeads from './pages/admin/Leads';
 import AdminPending from './pages/admin/Pending';
+import AiHowItWorks from './pages/admin/AiHowItWorks';
 import CreateUsers from './pages/CreateUsers';
 import ResetPassword from './pages/ResetPassword';
 import BDLeads from './pages/bd/Leads';
@@ -69,6 +70,11 @@ function App() {
           <Route path="/admin/pending" element={
             <ProtectedRoute role="admin">
               <AdminLayout><AdminPending /></AdminLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/ai-insights" element={
+            <ProtectedRoute role="admin">
+              <AdminLayout><AiHowItWorks /></AdminLayout>
             </ProtectedRoute>
           } />
           <Route path="/admin/users" element={

@@ -446,8 +446,8 @@ class LeadRoutingService:
         return results
     
     @staticmethod
-    def complete_lead(lead_id: str) -> Dict[str, Any]:
-        """Complete a lead and fill freed capacity (pending + reclaim mismatched)."""
+    def complete_lead(lead_id: str, *, auto_fill: bool = False) -> Dict[str, Any]:
+        """Complete a lead. auto_fill=False disables pending/reclaim automation."""
         try:
             lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
             if not lead:
@@ -463,15 +463,17 @@ class LeadRoutingService:
                 {
                     "$set": {
                         "status": "completed",
-                        "completed_at": now
+                        "completed_at": now,
+                        "reassign_requested": False,
                     }
                 }
             )
             
             LeadRoutingService._sync_active_count(bd_id)
 
-            # Fill freed slot(s) using all languages this BD speaks
-            assignments = LeadRoutingService.fill_capacity_for_bd(bd_id)
+            assignments: List[Dict[str, Any]] = []
+            if auto_fill:
+                assignments = LeadRoutingService.fill_capacity_for_bd(bd_id)
             
             return {
                 "success": True,

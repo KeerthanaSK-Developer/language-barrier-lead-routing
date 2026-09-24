@@ -3,9 +3,12 @@ import { leadsAPI, bdsAPI } from '../../services/api';
 import BulkCsvUpload from '../../components/BulkCsvUpload';
 import CopyNotice from '../../components/CopyNotice';
 import Pagination from '../../components/Pagination';
+import CallSchedulePanel from '../../components/CallSchedulePanel';
+import BdAssignPicker from '../../components/BdAssignPicker';
+import LeadCallInsightsCard from '../../components/LeadCallInsightsCard';
 import { Spinner, PageLoader } from '../../components/Spinner';
 import { getErrorMessage } from '../../utils/errors';
-import { Plus, Upload, RefreshCw, UserPlus } from 'lucide-react';
+import { Plus, Upload, RefreshCw, UserPlus, RefreshCcw, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const AdminLeads = () => {
@@ -16,7 +19,7 @@ const AdminLeads = () => {
   const [showModal, setShowModal] = useState(false);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [assignLead, setAssignLead] = useState(null);
-  const [selectedBdId, setSelectedBdId] = useState('');
+  const [assignMode, setAssignMode] = useState('assign'); // assign | reassign
   const [assigning, setAssigning] = useState(false);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState('');
@@ -31,10 +34,13 @@ const AdminLeads = () => {
     email: '',
     phone: '',
     preferred_language: '',
-    transcription: '',
   });
   const [leadNotice, setLeadNotice] = useState(null);
   const [detailLead, setDetailLead] = useState(null);
+  const [langSaving, setLangSaving] = useState(false);
+  const [langEditing, setLangEditing] = useState(false);
+  const [editPreferred, setEditPreferred] = useState('');
+  const [editCallLangs, setEditCallLangs] = useState('');
 
   const fetchLeads = useCallback(async (isRefresh = false, pageOverride, sizeOverride) => {
     const p = pageOverride ?? page;
@@ -43,10 +49,16 @@ const AdminLeads = () => {
       if (isRefresh) setRefreshing(true);
       const response = await leadsAPI.getAll({ page: p, page_size: size });
       const data = response.data || {};
-      setLeads(data.items || []);
+      const items = data.items || [];
+      setLeads(items);
       setTotal(data.total || 0);
       setTotalPages(data.total_pages || 0);
       if (data.page) setPage(data.page);
+      // Keep open detail modal in sync (call language / join % after transcription)
+      setDetailLead((prev) => {
+        if (!prev?.id) return prev;
+        return items.find((l) => l.id === prev.id) || prev;
+      });
     } catch (error) {
       toast.error(getErrorMessage(error, 'Failed to load leads'));
     } finally {
@@ -54,6 +66,64 @@ const AdminLeads = () => {
       setRefreshing(false);
     }
   }, [page, pageSize]);
+
+  const applySessionInsightsToLead = useCallback((session) => {
+    if (!session?.lead_id) return;
+    const insights = session.insights || {};
+    const langs = insights.languages_detected || [];
+    const sessionUrls = (session.recordings || [])
+      .map((r) => (typeof r === 'string' ? r : r?.url))
+      .filter(Boolean);
+    const patch = {
+      ...(langs.length
+        ? { callLanguages: langs, transcriptedLanguages: langs }
+        : {}),
+      ...(session.insights
+        ? {
+            last_call_insights: insights,
+            call_join_probability: insights.join_probability,
+            call_interest_level: insights.interest_level,
+            call_interested: insights.interested,
+          }
+        : {}),
+    };
+    setLeads((prev) =>
+      prev.map((l) => {
+        if (l.id !== session.lead_id) return l;
+        const mergedUrls = [
+          ...new Set([...(l.call_recording_urls || []), ...sessionUrls]),
+        ];
+        return {
+          ...l,
+          ...patch,
+          ...(mergedUrls.length
+            ? { call_recording_urls: mergedUrls, call_recording_count: mergedUrls.length }
+            : {}),
+        };
+      })
+    );
+    setDetailLead((prev) => {
+      if (prev?.id !== session.lead_id) return prev;
+      const mergedUrls = [
+        ...new Set([...(prev.call_recording_urls || []), ...sessionUrls]),
+      ];
+      return {
+        ...prev,
+        ...patch,
+        ...(mergedUrls.length
+          ? { call_recording_urls: mergedUrls, call_recording_count: mergedUrls.length }
+          : {}),
+      };
+    });
+  }, []);
+
+  const handleInsightsReady = useCallback(
+    (session) => {
+      applySessionInsightsToLead(session);
+      fetchLeads(true);
+    },
+    [applySessionInsightsToLead, fetchLeads]
+  );
 
   const fetchBDs = async () => {
     try {
@@ -85,50 +155,26 @@ const AdminLeads = () => {
   const handleCreateLead = async (e) => {
     e.preventDefault();
     setFormError('');
-    const language = formData.preferred_language.trim();
-    const transcription = formData.transcription.trim();
-    if (!language && !transcription) {
-      setFormError('Provide preferred language and/or call transcription');
-      return;
-    }
     try {
       setCreating(true);
       const payload = {
         name: formData.name.trim(),
         email: formData.email.trim(),
         phone: formData.phone.trim(),
-        preferred_language: language || null,
-        transcriptionData: transcription
-          ? {
-              callId: '',
-              source: 'transcript_content',
-              transcript: transcription,
-            }
-          : null,
+        preferred_language: formData.preferred_language.trim() || null,
       };
       const response = await leadsAPI.create(payload);
-      const routed = Boolean(response.data.routing?.routed);
-      const bdName = response.data.routing?.bd_name || '';
-      const resolvedLang = response.data.lead?.preferred_language || language;
-      const transcripted = response.data.lead?.transcriptedLanguages || [];
-      const notice = {
+      const resolvedLang = response.data.lead?.preferred_language || payload.preferred_language || '—';
+      setLeadNotice({
         name: payload.name,
         email: payload.email,
         phone: payload.phone,
         language: resolvedLang,
-        transcripted: transcripted.join(', ') || '—',
-        bdName: routed ? bdName : '',
-      };
-      setLeadNotice(notice);
-
-      if (routed) {
-        toast.success(`Lead created and auto-routed to ${bdName}. Copy the details below.`);
-      } else {
-        toast.error('Lead created but no BD available. Details stay on screen for 1 minute.');
-      }
-
+        bdName: '',
+      });
+      toast.success('Lead created — assign a BD when ready');
       setShowModal(false);
-      setFormData({ name: '', email: '', phone: '', preferred_language: '', transcription: '' });
+      setFormData({ name: '', email: '', phone: '', preferred_language: '' });
       fetchLeads();
     } catch (error) {
       const msg = getErrorMessage(error, 'Failed to create lead');
@@ -139,25 +185,27 @@ const AdminLeads = () => {
     }
   };
 
-  const handleManualAssign = async (e) => {
-    e.preventDefault();
-    if (!assignLead || !selectedBdId) return;
+  const handleManualAssign = async (bdId) => {
+    if (!assignLead || !bdId) return;
     setAssignError('');
     try {
       setAssigning(true);
-      const res = await leadsAPI.manualAssign(assignLead.id, selectedBdId);
-      const bd = bds.find((item) => item.bd_id === selectedBdId);
+      const isReassign = assignMode === 'reassign';
+      const res = isReassign
+        ? await leadsAPI.reassign(assignLead.id, bdId)
+        : await leadsAPI.manualAssign(assignLead.id, bdId);
+      const bd = bds.find((item) => item.bd_id === bdId);
       setLeadNotice({
         name: assignLead.name || assignLead.lead_name || '',
         email: assignLead.email || '',
         phone: assignLead.phone || '',
         language: assignLead.preferred_language || '',
-        bdName: bd?.name || 'BD',
+        bdName: bd?.name || res.data.bd_name || 'BD',
       });
       const note = res.data.warning ? ` (${res.data.warning})` : '';
-      toast.success(`Assigned to ${bd?.name || 'BD'}${note}. Copy the details below.`);
+      toast.success(`${isReassign ? 'Reassigned' : 'Assigned'} to ${bd?.name || 'BD'}${note}`);
       setAssignLead(null);
-      setSelectedBdId('');
+      setAssignMode('assign');
       fetchLeads();
     } catch (error) {
       const msg = getErrorMessage(error, 'Failed to assign lead');
@@ -169,43 +217,77 @@ const AdminLeads = () => {
   };
 
   const processLeadRow = async (row) => {
-    const [name, email, phone, preferred_language = '', transcription = ''] = row;
+    const [name, email, phone, preferred_language = ''] = row;
     const language = (preferred_language || '').trim();
-    const transcript = String(transcription || '')
-      .trim()
-      .replace(/\\n/g, '\n');
-    if (!language && !transcript) {
-      throw new Error('Provide preferred_language and/or transcription');
-    }
     const payload = {
       name: (name || '').trim(),
       email: (email || '').trim(),
       phone: (phone || '').trim(),
       preferred_language: language || null,
-      transcriptionData: transcript
-        ? { callId: '', source: 'transcript_content', transcript }
-        : null,
     };
     const response = await leadsAPI.create(payload);
-    const routed = Boolean(response.data.routing?.routed);
-    const bdName = response.data.routing?.bd_name || '';
-    const resolvedLang = response.data.lead?.preferred_language || language || 'detected';
-    const reason = routed
-      ? `Created & assigned to ${bdName}`
-      : (response.data.routing?.reason || 'Created (pending assignment)');
+    const resolvedLang = response.data.lead?.preferred_language || language || '—';
     const copyText = [
       `Name: ${payload.name}`,
       `Email: ${payload.email}`,
       `Phone: ${payload.phone}`,
       `Language: ${resolvedLang}`,
-      `Assigned BD: ${routed ? bdName : 'pending'}`,
+      `Assigned BD: pending`,
     ].join('\n');
     return {
-      reason,
+      reason: 'Created — awaiting manual assignment',
       data: { ...payload, preferred_language: resolvedLang },
       copyText,
       copyLabel: 'Copy details',
     };
+  };
+
+  const openDetail = (lead) => {
+    setDetailLead(lead);
+    setLangEditing(false);
+    setEditPreferred(lead.preferred_language || '');
+    setEditCallLangs(callLangs(lead).join(', '));
+  };
+
+  const cancelLangEdit = () => {
+    if (!detailLead) return;
+    setLangEditing(false);
+    setEditPreferred(detailLead.preferred_language || '');
+    setEditCallLangs(callLangs(detailLead).join(', '));
+  };
+
+  const handleSaveLanguages = async () => {
+    if (!detailLead?.id) return;
+    try {
+      setLangSaving(true);
+      const payload = {
+        preferred_language: editPreferred.trim() || null,
+      };
+      const existingCall = callLangs(detailLead);
+      if (existingCall.length > 0) {
+        const parsed = editCallLangs
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (parsed.length === 0) {
+          toast.error('Call language needs at least one value');
+          return;
+        }
+        payload.callLanguages = parsed;
+      }
+      const res = await leadsAPI.update(detailLead.id, payload);
+      const updated = res.data;
+      setDetailLead(updated);
+      setEditPreferred(updated.preferred_language || '');
+      setEditCallLangs((updated.callLanguages || []).join(', '));
+      setLeads((prev) => prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)));
+      setLangEditing(false);
+      toast.success('Languages updated');
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Failed to update languages'));
+    } finally {
+      setLangSaving(false);
+    }
   };
 
   const getStatusBadge = (status) => {
@@ -222,10 +304,31 @@ const AdminLeads = () => {
   const isUnassigned = (lead) =>
     !lead.assigned_bd && ['new', 'pending'].includes(lead.status);
 
-  const speaks = (bd, language) =>
-    (bd.supported_languages || []).some(
-      (l) => String(l).toLowerCase() === String(language || '').toLowerCase()
-    );
+  const hasProcessedCall = (lead) =>
+    Boolean(lead?.last_call_session_id || lead?.last_call_insights?.session_id);
+
+  const callLangs = (lead) => {
+    // Only after a real processed call — never show preferred as call language
+    if (!hasProcessedCall(lead)) return [];
+    return lead.callLanguages?.length
+      ? lead.callLanguages
+      : lead.transcriptedLanguages || [];
+  };
+
+  const joinProbability = (lead) => {
+    const v = lead.call_join_probability ?? lead.last_call_insights?.join_probability;
+    return v != null && v !== '' ? Number(v) : null;
+  };
+
+  const reassignSourceLabel = (lead) => {
+    const src = lead.reassign_source || '';
+    if (src === 'bd') return 'BDA';
+    if (src === 'ai_language_barrier') return 'AI · language barrier';
+    if (src === 'ai_cooperation') return 'AI · BDA engagement';
+    if (src === 'ai_not_interested') return 'AI · not interested';
+    if (src.startsWith('ai')) return 'AI';
+    return src || 'Request';
+  };
 
   if (loading) {
     return <PageLoader />;
@@ -273,7 +376,6 @@ const AdminLeads = () => {
             { label: 'Email', value: leadNotice.email },
             { label: 'Phone', value: leadNotice.phone },
             { label: 'Language', value: leadNotice.language },
-            { label: 'Call Transcripted language', value: leadNotice.transcripted || '—' },
             { label: 'Assigned BD', value: leadNotice.bdName || 'Pending' },
           ]}
           copyText={[
@@ -281,7 +383,6 @@ const AdminLeads = () => {
             `Email: ${leadNotice.email}`,
             `Phone: ${leadNotice.phone}`,
             `Language: ${leadNotice.language}`,
-            `Call Transcripted language: ${leadNotice.transcripted || '—'}`,
             `Assigned BD: ${leadNotice.bdName || 'Pending'}`,
           ].join('\n')}
           copyLabel="Copy details"
@@ -297,8 +398,9 @@ const AdminLeads = () => {
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Name</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Email</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Contact</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Language</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Call Transcripted Language</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Preferred language</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Call language (latest)</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Join % (latest)</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Assigned BD</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Status</th>
                 <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Action</th>
@@ -307,7 +409,7 @@ const AdminLeads = () => {
             <tbody>
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="py-8 text-center text-gray-500">
+                  <td colSpan="9" className="py-8 text-center text-gray-500">
                     No leads found
                   </td>
                 </tr>
@@ -315,26 +417,27 @@ const AdminLeads = () => {
                 leads.map((lead) => (
                   <tr key={lead.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-3 px-4 font-medium text-gray-900">
-                      <button
-                        type="button"
-                        className="text-left text-primary-700 hover:underline font-medium"
-                        onClick={() => setDetailLead(lead)}
-                      >
-                        {lead.name || lead.lead_name}
-                      </button>
+                      {lead.name || lead.lead_name}
                     </td>
                     <td className="py-3 px-4 text-gray-600">{lead.email || '-'}</td>
                     <td className="py-3 px-4 text-gray-600">{lead.phone || '-'}</td>
                     <td className="py-3 px-4">
-                      <span className="badge badge-info">{lead.preferred_language || '-'}</span>
+                      <span className="badge badge-info">{lead.preferred_language || '—'}</span>
                     </td>
                     <td className="py-3 px-4">
-                      {(lead.transcriptedLanguages || []).length > 0 ? (
+                      {callLangs(lead).length > 0 ? (
                         <div className="flex flex-wrap gap-1">
-                          {lead.transcriptedLanguages.map((lang) => (
+                          {callLangs(lead).map((lang) => (
                             <span key={lang} className="badge badge-warning">{lang}</span>
                           ))}
                         </div>
+                      ) : (
+                        <span className="text-gray-400 text-sm">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4">
+                      {joinProbability(lead) != null && !Number.isNaN(joinProbability(lead)) ? (
+                        <span className="badge badge-info">{joinProbability(lead)}%</span>
                       ) : (
                         <span className="text-gray-400 text-sm">—</span>
                       )}
@@ -346,21 +449,42 @@ const AdminLeads = () => {
                       <span className={`badge ${getStatusBadge(lead.status)}`}>{lead.status}</span>
                     </td>
                     <td className="py-3 px-4">
-                      {isUnassigned(lead) ? (
+                      <div className="flex flex-col gap-1.5 items-start">
                         <button
-                          onClick={() => {
-                            setAssignLead(lead);
-                            setSelectedBdId('');
-                            setAssignError('');
-                          }}
-                          className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+                          type="button"
+                          onClick={() => openDetail(lead)}
+                          className="text-primary-600 hover:text-primary-700 text-sm font-medium inline-flex items-center gap-1"
                         >
-                          <UserPlus className="w-4 h-4" />
-                          Assign
+                          <Eye className="w-4 h-4" />
+                          Details
                         </button>
-                      ) : (
-                        <span className="text-gray-300 text-sm">—</span>
-                      )}
+                        {isUnassigned(lead) ? (
+                          <button
+                            onClick={() => {
+                              setAssignLead(lead);
+                              setAssignMode('assign');
+                              setAssignError('');
+                            }}
+                            className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+                          >
+                            <UserPlus className="w-4 h-4" />
+                            Assign
+                          </button>
+                        ) : lead.reassign_requested ? (
+                          <button
+                            onClick={() => {
+                              setAssignLead(lead);
+                              setAssignMode('reassign');
+                              setAssignError('');
+                            }}
+                            className="text-amber-700 hover:text-amber-800 text-sm font-medium inline-flex items-center gap-1"
+                            title="Open reassign — reason shown in modal"
+                          >
+                            <RefreshCcw className="w-4 h-4" />
+                            Reassign
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -381,7 +505,7 @@ const AdminLeads = () => {
 
       {detailLead && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-          <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6">
+          <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-3xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6">
             <div className="flex items-start justify-between gap-3 mb-4">
               <div>
                 <h2 className="text-xl font-semibold text-gray-900">
@@ -399,23 +523,97 @@ const AdminLeads = () => {
                 <dd className="font-medium text-gray-900">{detailLead.phone || '-'}</dd>
               </div>
               <div>
-                <dt className="text-gray-500">Preferred language</dt>
+                <dt className="text-gray-500 mb-1">Preferred language</dt>
                 <dd>
-                  <span className="badge badge-info">{detailLead.preferred_language || '-'}</span>
+                  <input
+                    type="text"
+                    className="input-field text-sm disabled:bg-gray-100 disabled:text-gray-600"
+                    value={editPreferred}
+                    onChange={(e) => setEditPreferred(e.target.value)}
+                    placeholder="Any language (e.g. Hindi, Tamil)"
+                    disabled={!langEditing}
+                  />
                 </dd>
               </div>
               <div>
-                <dt className="text-gray-500 mb-1">Call Transcripted language</dt>
-                <dd className="flex flex-wrap gap-1">
-                  {(detailLead.transcriptedLanguages || []).length > 0 ? (
-                    detailLead.transcriptedLanguages.map((lang) => (
-                      <span key={lang} className="badge badge-warning">{lang}</span>
-                    ))
+                <dt className="text-gray-500 mb-1">Call language (latest call)</dt>
+                <dd>
+                  {callLangs(detailLead).length > 0 ? (
+                    <input
+                      type="text"
+                      className="input-field text-sm disabled:bg-gray-100 disabled:text-gray-600"
+                      value={editCallLangs}
+                      onChange={(e) => setEditCallLangs(e.target.value)}
+                      placeholder="Comma-separated, e.g. English, Hindi"
+                      disabled={!langEditing}
+                    />
                   ) : (
-                    <span className="text-gray-400">None detected</span>
+                    <span className="text-gray-400 text-sm">
+                      None yet — editable after a call is processed
+                    </span>
                   )}
                 </dd>
               </div>
+              <div className="flex flex-wrap gap-2">
+                {!langEditing ? (
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={() => setLangEditing(true)}
+                  >
+                    Enable language edit
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary text-xs inline-flex items-center gap-1"
+                      onClick={handleSaveLanguages}
+                      disabled={langSaving}
+                    >
+                      {langSaving ? <Spinner /> : null}
+                      Save languages
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      onClick={cancelLangEdit}
+                      disabled={langSaving}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
+              <div>
+                <dt className="text-gray-500">Join probability (latest call)</dt>
+                <dd className="font-medium text-gray-900">
+                  {joinProbability(detailLead) != null && !Number.isNaN(joinProbability(detailLead))
+                    ? `${joinProbability(detailLead)}%`
+                    : '—'}
+                </dd>
+              </div>
+              {detailLead.reassign_requested && (
+                <div className="p-2 rounded bg-amber-50 border border-amber-200">
+                  <p className="text-xs font-medium text-amber-900">
+                    Reassign · {reassignSourceLabel(detailLead)}
+                  </p>
+                  <p className="text-sm text-amber-800 mt-0.5">
+                    {detailLead.reassign_reason || '—'}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs mt-2"
+                    onClick={() => {
+                      setAssignLead(detailLead);
+                      setAssignMode('reassign');
+                      setAssignError('');
+                    }}
+                  >
+                    Reassign
+                  </button>
+                </div>
+              )}
               <div>
                 <dt className="text-gray-500">Status</dt>
                 <dd>
@@ -426,22 +624,14 @@ const AdminLeads = () => {
                 <dt className="text-gray-500">Assigned BD</dt>
                 <dd className="font-medium text-gray-900">{detailLead.assigned_bd_name || 'Unassigned'}</dd>
               </div>
-              {detailLead.transcriptionData?.transcript && (
-                <div>
-                  <dt className="text-gray-500 mb-1">
-                    Call transcript
-                    {detailLead.transcriptionData.callId
-                      ? ` · ${detailLead.transcriptionData.callId}`
-                      : ''}
-                  </dt>
-                  <dd className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                    <pre className="text-sm text-gray-800 whitespace-pre-wrap font-sans">
-                      {detailLead.transcriptionData.transcript}
-                    </pre>
-                  </dd>
-                </div>
-              )}
             </dl>
+
+            <LeadCallInsightsCard lead={detailLead} />
+            <CallSchedulePanel
+              leadId={detailLead.id}
+              leadName={detailLead.name || detailLead.lead_name}
+              onInsightsReady={handleInsightsReady}
+            />
           </div>
         </div>
       )}
@@ -491,7 +681,7 @@ const AdminLeads = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Preferred Language <span className="text-gray-400 font-normal">(or transcription below)</span>
+                  Preferred Language <span className="text-gray-400 font-normal">(optional)</span>
                 </label>
                 <input
                   type="text"
@@ -501,20 +691,8 @@ const AdminLeads = () => {
                   placeholder="e.g. Tamil, Hindi, English"
                   disabled={creating}
                 />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Call transcription <span className="text-gray-400 font-normal">(optional if language set)</span>
-                </label>
-                <textarea
-                  value={formData.transcription}
-                  onChange={(e) => setFormData({ ...formData, transcription: e.target.value })}
-                  className="input-field min-h-[100px]"
-                  placeholder={"Agent: Good morning...\nLearner: Vanakkam..."}
-                  disabled={creating}
-                />
                 <p className="text-xs text-gray-500 mt-1">
-                  AI detects language from the transcript if language is empty or mixed.
+                  Call language is filled automatically after the video call is processed.
                 </p>
               </div>
               <div className="flex flex-col-reverse sm:flex-row gap-3 pt-4">
@@ -549,64 +727,67 @@ const AdminLeads = () => {
       {assignLead && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
           <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-md w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6">
-            <h2 className="text-xl font-semibold mb-1">Manual Assign</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              {assignLead.name || assignLead.lead_name} · {assignLead.preferred_language}
+            <h2 className="text-xl font-semibold mb-1">
+              {assignMode === 'reassign' ? 'Reassign lead' : 'Assign lead'}
+            </h2>
+            <p className="text-sm text-gray-500 mb-3">
+              {assignLead.name || assignLead.lead_name}
             </p>
+
+            <dl className="grid grid-cols-2 gap-3 text-sm mb-3">
+              <div>
+                <dt className="text-xs text-gray-500">Preferred language</dt>
+                <dd>
+                  <span className="badge badge-info">{assignLead.preferred_language || '—'}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-gray-500">Call language</dt>
+                <dd className="flex flex-wrap gap-1 mt-0.5">
+                  {callLangs(assignLead).length > 0 ? (
+                    callLangs(assignLead).map((lang) => (
+                      <span key={lang} className="badge badge-warning">{lang}</span>
+                    ))
+                  ) : (
+                    <span className="text-gray-400 text-xs">—</span>
+                  )}
+                </dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-xs text-gray-500">Join probability</dt>
+                <dd className="font-medium text-gray-900">
+                  {joinProbability(assignLead) != null && !Number.isNaN(joinProbability(assignLead))
+                    ? `${joinProbability(assignLead)}%`
+                    : '—'}
+                </dd>
+              </div>
+            </dl>
+
+            {assignMode === 'reassign' && (
+              <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                <p className="text-xs font-semibold text-amber-800 mb-1">
+                  Reassign reason · {reassignSourceLabel(assignLead)}
+                </p>
+                <p className="leading-snug">{assignLead.reassign_reason || 'Requested'}</p>
+              </div>
+            )}
+
             {assignError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
                 {assignError}
               </div>
             )}
-            <form onSubmit={handleManualAssign} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Assign to BD *</label>
-                <select
-                  value={selectedBdId}
-                  onChange={(e) => setSelectedBdId(e.target.value)}
-                  className="input-field"
-                  required
-                  disabled={assigning}
-                >
-                  <option value="">Select BD</option>
-                  {bds.map((bd) => {
-                    const capacity = bd.available_capacity ?? Math.max(0, 3 - (bd.active_lead_count || 0));
-                    const match = speaks(bd, assignLead.preferred_language);
-                    return (
-                      <option key={bd.bd_id} value={bd.bd_id} disabled={capacity <= 0}>
-                        {bd.name}
-                        {match ? ' ✓ lang' : ''} · {capacity} slots
-                        {capacity <= 0 ? ' (full)' : ''}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setAssignLead(null)}
-                  className="btn-secondary flex-1"
-                  disabled={assigning}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary flex-1 flex items-center justify-center gap-2"
-                  disabled={assigning || !selectedBdId}
-                >
-                  {assigning ? (
-                    <>
-                      <Spinner />
-                      Assigning...
-                    </>
-                  ) : (
-                    'Assign Lead'
-                  )}
-                </button>
-              </div>
-            </form>
+            <BdAssignPicker
+              lead={assignLead}
+              bds={bds}
+              mode={assignMode}
+              busy={assigning}
+              onConfirm={handleManualAssign}
+              onCancel={() => {
+                setAssignLead(null);
+                setAssignMode('assign');
+              }}
+            />
           </div>
         </div>
       )}
@@ -618,12 +799,11 @@ const AdminLeads = () => {
             { key: 'name', label: 'name' },
             { key: 'email', label: 'email' },
             { key: 'phone', label: 'contact number' },
-            { key: 'preferred_language', label: 'preferred_language (optional if transcription)' },
-            { key: 'transcription', label: 'transcription (Agent:\\nLearner — optional if language)' },
+            { key: 'preferred_language', label: 'preferred_language (optional)' },
           ]}
           exampleRows={[
-            ['Ravi Krishnan', 'ravi@example.com', '9876543210', 'Tamil', ''],
-            ['Yuki Tanaka', 'yuki@example.com', '9123456780', '', 'Agent: Hello\nLearner: Vanakkam'],
+            ['Ravi Krishnan', 'ravi@example.com', '9876543210', 'Tamil'],
+            ['Yuki Tanaka', 'yuki@example.com', '9123456780', ''],
           ]}
           processRow={processLeadRow}
           resultColumns={[

@@ -10,6 +10,8 @@ leads_collection = db.leads
 bds_collection = db.bds
 routing_history_collection = db.routing_history
 pending_leads_collection = db.pending_leads
+call_sessions_collection = db.call_sessions
+call_transcripts_collection = db.call_transcripts
 
 
 def serialize_doc(doc, *, id_field: str | None = "id"):

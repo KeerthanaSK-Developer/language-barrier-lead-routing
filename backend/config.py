@@ -53,9 +53,31 @@ MAX_ACTIVE_LEADS_PER_BD = int(os.getenv("MAX_ACTIVE_LEADS_PER_BD", "3"))
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Company")
 COMPANY_DOMAIN = os.getenv("COMPANY_DOMAIN", "company.com")
 
-# AI (OpenAI-compatible — Hyrenet / Claude). Used for transcript language detection.
+# AI (OpenAI-compatible — Hyrenet / Claude). Language detection + call insights.
 # Do not use Bedrock.
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://ai.hyrenet-staging.in/v1").rstrip("/")
 AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
 AI_MODEL = os.getenv("AI_MODEL", "global.anthropic.claude-sonnet-4-6").strip()
 AI_TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "45"))
+
+# Local speech-to-text (faster-whisper): ffmpeg video→wav, then Whisper wav→text.
+# Model sizes: tiny | base | small | medium | large-v3
+# medium+ strongly recommended for Tamil/Hindi/Telugu (small often garbles Indic as English)
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium").strip()
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu").strip()
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip()
+WHISPER_CHUNK_SECONDS = int(os.getenv("WHISPER_CHUNK_SECONDS", "600"))
+# Indic (Tamil/Hindi/…): short chunks — long windows cause Whisper loop hallucinations
+WHISPER_INDIC_CHUNK_SECONDS = int(os.getenv("WHISPER_INDIC_CHUNK_SECONDS", "45"))
+# TEMP: always re-transcribe on Fetch even if same S3 URLs were already processed.
+FORCE_REPROCESS_RECORDINGS = True
+
+# Classify (video meetings)
+CLASSIFY_URL = os.getenv("CLASSIFY_URL", "").rstrip("/")
+CLASSIFY_API_KEY = os.getenv("CLASSIFY_API_KEY", "").strip()  # request header authorization-key
+CLASSIFY_AUTH_TOKEN = os.getenv("CLASSIFY_AUTH_TOKEN", "").strip()
+CLASSIFY_ORG_ID = os.getenv("CLASSIFY_ORG_ID", "a4213e83-097f-4d8e-bfa5-0960f2958c89").strip()
+CLASSIFY_PRODUCT = os.getenv("CLASSIFY_PRODUCT", "guvi").strip()
+CLASSIFY_CREATOR_EMAIL = os.getenv("CLASSIFY_CREATOR_EMAIL", "").strip()
+CLASSIFY_TIMEZONE = os.getenv("CLASSIFY_TIMEZONE", "Asia/Kolkata").strip()
+CLASSIFY_TIMEOUT_SECONDS = int(os.getenv("CLASSIFY_TIMEOUT_SECONDS", "60"))

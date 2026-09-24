@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { dashboardAPI, bdsAPI, leadsAPI } from '../../services/api';
-import { AlertTriangle, Clock, Globe, UserPlus } from 'lucide-react';
+import { AlertTriangle, Clock, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { Spinner, PageLoader } from '../../components/Spinner';
+import { PageLoader } from '../../components/Spinner';
 import Pagination from '../../components/Pagination';
+import BdAssignPicker from '../../components/BdAssignPicker';
 import { getErrorMessage } from '../../utils/errors';
 
 const AdminPending = () => {
   const [pendingLeads, setPendingLeads] = useState([]);
   const [bds, setBds] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedBd, setSelectedBd] = useState({});
+  const [openAssignId, setOpenAssignId] = useState(null);
   const [assigningTo, setAssigningTo] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -46,19 +47,7 @@ const AdminPending = () => {
     return new Date(dateString).toLocaleString();
   };
 
-  const matchingBDs = (language) =>
-    bds.filter((bd) =>
-      (bd.supported_languages || []).some(
-        (l) => String(l).toLowerCase() === String(language || '').toLowerCase()
-      )
-    );
-
-  const handleAssign = async (leadId) => {
-    const bdId = selectedBd[leadId];
-    if (!bdId) {
-      toast.error('Please select a BD');
-      return;
-    }
+  const handleAssign = async (leadId, bdId) => {
     try {
       setAssigningTo(leadId);
       const res = await leadsAPI.manualAssign(leadId, bdId);
@@ -67,11 +56,7 @@ const AdminPending = () => {
       } else {
         toast.success(res.data.message || 'Lead assigned');
       }
-      setSelectedBd((prev) => {
-        const next = { ...prev };
-        delete next[leadId];
-        return next;
-      });
+      setOpenAssignId(null);
       await fetchData();
     } catch (error) {
       toast.error(getErrorMessage(error, 'Failed to assign lead'));
@@ -89,7 +74,7 @@ const AdminPending = () => {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Pending Leads</h1>
         <p className="text-gray-500 mt-1 text-sm sm:text-base">
-          Leads awaiting assignment — auto-route when capacity opens, or assign manually anytime
+          Leads awaiting manual assignment — same-language BDAs listed first, then other free slots
         </p>
       </div>
 
@@ -99,8 +84,7 @@ const AdminPending = () => {
           <div>
             <h3 className="font-semibold text-orange-900">Attention Required</h3>
             <p className="text-sm text-orange-700 mt-1">
-              {total} lead(s) pending. You can manually assign them to any BD below
-              (even if language does not match).
+              {total} lead(s) pending. Assign manually — no automatic routing.
             </p>
           </div>
         </div>
@@ -118,83 +102,50 @@ const AdminPending = () => {
         <div className="space-y-4">
           {pendingLeads.map((lead) => {
             const leadId = lead.lead_id || lead.id;
-            const matches = matchingBDs(lead.preferred_language);
+            const pickerLead = { ...lead, id: leadId };
 
             return (
               <div key={leadId} className="card border-l-4 border-orange-400">
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="font-semibold text-gray-900">{lead.name || lead.lead_name}</h3>
-                      <span className="badge badge-warning">Pending</span>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h3 className="font-semibold text-gray-900">{lead.name || lead.lead_name}</h3>
+                    <span className="badge badge-warning">Pending</span>
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    {lead.email || ''}{lead.phone ? ` · ${lead.phone}` : ''}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Globe className="w-4 h-4 text-gray-400" />
+                      <span>
+                        Preferred:{' '}
+                        <span className="badge badge-info">{lead.preferred_language || '—'}</span>
+                      </span>
                     </div>
-
-                    <p className="text-sm text-gray-600 mb-2">
-                      {lead.email || ''}{lead.phone ? ` · ${lead.phone}` : ''}
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-4 text-sm">
-                      <div className="flex items-center gap-2">
-                        <Globe className="w-4 h-4 text-gray-400" />
-                        <span>Language: <span className="badge badge-info">{lead.preferred_language}</span></span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-gray-400" />
-                        <span className="text-gray-500">Created: {formatDate(lead.created_at)}</span>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-gray-400" />
+                      <span className="text-gray-500">Created: {formatDate(lead.created_at)}</span>
                     </div>
-
-                    {matches.length === 0 ? (
-                      <p className="text-sm text-amber-700 mt-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                        No BD speaks <strong>{lead.preferred_language}</strong>. You can still assign manually to any BD.
-                      </p>
-                    ) : (
-                      <p className="text-sm text-gray-500 mt-3">
-                        Matching BDs: {matches.map((b) => b.name).join(', ')}
-                      </p>
-                    )}
                   </div>
 
-                  <div className="flex flex-col gap-2 w-full lg:w-auto lg:min-w-[280px]">
-                    <select
-                      value={selectedBd[leadId] || ''}
-                      onChange={(e) => setSelectedBd({ ...selectedBd, [leadId]: e.target.value })}
-                      className="input-field w-full"
-                    >
-                      <option value="">Select BD</option>
-                      {bds.map((bd) => {
-                        const speaks = (bd.supported_languages || []).some(
-                          (l) => String(l).toLowerCase() === String(lead.preferred_language || '').toLowerCase()
-                        );
-                        const capacity = bd.available_capacity ?? Math.max(0, 3 - (bd.active_lead_count || 0));
-                        return (
-                          <option key={bd.bd_id} value={bd.bd_id} disabled={capacity <= 0}>
-                            {bd.name}
-                            {speaks ? ' ✓ lang' : ''}
-                            {` · ${capacity} slots`}
-                            {capacity <= 0 ? ' (full)' : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
+                  {openAssignId === leadId ? (
+                    <BdAssignPicker
+                      lead={pickerLead}
+                      bds={bds}
+                      mode="assign"
+                      busy={assigningTo === leadId}
+                      onConfirm={(bdId) => handleAssign(leadId, bdId)}
+                      onCancel={() => setOpenAssignId(null)}
+                    />
+                  ) : (
                     <button
-                      onClick={() => handleAssign(leadId)}
-                      disabled={!selectedBd[leadId] || assigningTo === leadId}
-                      className="btn-primary flex items-center justify-center gap-2 w-full"
+                      type="button"
+                      className="btn-primary text-sm w-full sm:w-auto"
+                      onClick={() => setOpenAssignId(leadId)}
                     >
-                      {assigningTo === leadId ? (
-                        <>
-                          <Spinner />
-                          Assigning...
-                        </>
-                      ) : (
-                        <>
-                          <UserPlus className="w-4 h-4" />
-                          Assign
-                        </>
-                      )}
+                      Assign
                     </button>
-                  </div>
+                  )}
                 </div>
               </div>
             );

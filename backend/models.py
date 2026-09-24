@@ -77,9 +77,8 @@ class LeadBase(BaseModel):
 
 
 class LeadCreate(LeadBase):
-    # Prefer language and/or call transcription (at least one required)
-    transcription: Optional[str] = None
-    transcriptionData: Optional[Union[TranscriptionData, dict]] = None
+    """preferred_language is optional — callLanguages filled after video processing."""
+    pass
 
 
 class LeadUpdate(BaseModel):
@@ -87,23 +86,29 @@ class LeadUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     preferred_language: Optional[str] = None
+    # Admin may edit only when lead already has callLanguages from a processed call
+    callLanguages: Optional[List[str]] = None
     status: Optional[LeadStatus] = None
-    transcription: Optional[str] = None
-    transcriptionData: Optional[Union[TranscriptionData, dict]] = None
 
 
 class Lead(LeadBase):
     id: str
-    preferred_language: str
+    preferred_language: Optional[str] = None
     assigned_bd: Optional[str]
     status: LeadStatus
-    transcriptionData: Optional[dict] = None
+    callLanguages: Optional[List[str]] = None
     transcriptedLanguages: Optional[List[str]] = None
+    reassign_requested: Optional[bool] = None
+    reassign_reason: Optional[str] = None
     created_at: datetime
     assigned_at: Optional[datetime]
     completed_at: Optional[datetime]
     class Config:
         from_attributes = True
+
+
+class ReassignRequest(BaseModel):
+    reason: Optional[str] = None
 
 # BD Profile Model
 class BDProfile(BaseModel):
@@ -169,3 +174,12 @@ class BDWorkload(BaseModel):
     active_lead_count: int
     available_capacity: int
     availability_status: str
+
+
+# Classify video call sessions
+class ScheduleCallRequest(BaseModel):
+    lead_id: str
+    start_time: str  # ISO datetime; converted to unix seconds for Classify
+    end_time: str    # ISO datetime; sent as givenEndTime (unix seconds)
+    label: Optional[str] = None
+    auto_recording_start: str = "on"

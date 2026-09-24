@@ -4,6 +4,7 @@ import smtplib
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from config import (
@@ -190,6 +191,64 @@ class EmailService:
         """
 
         return self.send_email_background(bd_email, subject, html_content)
+
+    def send_meeting_scheduled(
+        self,
+        *,
+        to_name: str,
+        to_email: str,
+        label: str,
+        start_time: str,
+        end_time: str,
+        join_url: str = "",
+        host_name: str = "",
+    ) -> bool:
+        """Queue meeting invite email to the lead (non-blocking)."""
+        subject = f"Video call scheduled: {label}"
+
+        def _fmt(iso: str) -> str:
+            try:
+                dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+                return dt.strftime("%d %b %Y, %I:%M %p %Z").strip() or str(iso)
+            except Exception:
+                return str(iso)
+
+        start_fmt = _fmt(start_time)
+        end_fmt = _fmt(end_time)
+        join_block = ""
+        if join_url:
+            join_block = f"""
+                <p><a href="{join_url}" style="background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Join video call</a></p>
+                <p style="color: #666; font-size: 13px; word-break: break-all;">Or open: {join_url}</p>
+            """
+        else:
+            join_block = "<p>Your host will share the join link shortly.</p>"
+
+        host_line = f"<p><strong>Host:</strong> {host_name}</p>" if host_name else ""
+
+        html_content = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #2563eb;">Your video call is scheduled</h2>
+                <p>Dear {to_name},</p>
+                <p>A meeting has been scheduled for you with {COMPANY_NAME}.</p>
+                <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                    <p><strong>Meeting:</strong> {label}</p>
+                    <p><strong>Starts:</strong> {start_fmt}</p>
+                    <p><strong>Ends:</strong> {end_fmt}</p>
+                    {host_line}
+                </div>
+                {join_block}
+                <p style="color: #666; font-size: 14px;">
+                    You can join as a guest — enter your name and email when prompted.
+                </p>
+                <p>Best regards,<br>{COMPANY_NAME} Team</p>
+            </div>
+        </body>
+        </html>
+        """
+        return self.send_email_background(to_email, subject, html_content)
 
 
 # Global instance

@@ -54,7 +54,7 @@ export const authAPI = {
   listUsers: () => api.get('/auth/list'),
 };
 
-// Leads API
+// Leads assign / reassign
 export const leadsAPI = {
   getAll: (params = {}) => api.get('/leads/', { params }),
   getMyLeads: (params = {}) => api.get('/leads/my-leads', { params }),
@@ -64,6 +64,9 @@ export const leadsAPI = {
   delete: (id) => api.delete(`/leads/${id}`),
   bulkUpload: (rows) => api.post('/leads/bulk-upload', { rows }),
   manualAssign: (leadId, bdId) => api.post(`/leads/${leadId}/manual-assign/${bdId}`),
+  requestReassign: (leadId, reason) =>
+    api.post(`/leads/${leadId}/request-reassign`, { reason: reason || '' }),
+  reassign: (leadId, bdId) => api.post(`/leads/${leadId}/reassign/${bdId}`),
 };
 
 // BDs API
@@ -82,6 +85,16 @@ export const dashboardAPI = {
   getBDWorkload: () => api.get('/bd-workload'),
   bulkUserUpload: (rows) => api.post('/bulk-users-upload', { rows }),
   checkPending: () => api.post('/check-pending'),
+};
+
+// Classify video calls
+export const callsAPI = {
+  configStatus: () => api.get('/calls/config-status'),
+  list: (params = {}) => api.get('/calls/', { params }),
+  get: (sessionId) => api.get(`/calls/${sessionId}`),
+  schedule: (data) => api.post('/calls/schedule', data),
+  fetchAttendance: (sessionId) => api.post(`/calls/${sessionId}/fetch-attendance`),
+  reprocess: (sessionId) => api.post(`/calls/${sessionId}/reprocess`),
 };
 
 export default api;

@@ -8,7 +8,6 @@ from models import UserLogin, Token, UserCreate, PasswordReset
 from auth import get_current_user, get_current_admin_user
 from services.password_service import password_service
 from services.email_service import email_service
-from services.routing_service import lead_routing_service
 from services.ai_service import resolve_languages_with_transcript
 from bson import ObjectId
 import logging
@@ -132,7 +131,7 @@ async def create_user(
     result = users_collection.insert_one(user_dict)
     user_id = str(result.inserted_id)
     
-    # If BD, create BD profile then auto-assign matching pending leads
+    # If BD, create BD profile (no auto-assign of pending leads)
     assigned_leads = []
     if user_data.role.value == "bd":
         bds_collection.insert_one({
@@ -145,8 +144,6 @@ async def create_user(
             "status": "active",
             "availability": True
         })
-        # Assign pending / reclaim mismatched leads that match this BD's languages
-        assigned_leads = lead_routing_service.fill_capacity_for_bd(user_id)
     
     # Queue credentials email in background (SMTP must not block the API)
     email_queued = email_service.send_user_credentials(
