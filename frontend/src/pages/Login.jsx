@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Lock, User, AlertCircle } from 'lucide-react';
+import { Lock, User, AlertCircle, Github } from 'lucide-react';
+
+const GITHUB_REPO_URL =
+  'https://github.com/KeerthanaSK-Developer/language-barrier-lead-routing';
 import { Spinner } from '../components/Spinner';
 import { getErrorMessage } from '../utils/errors';
 
@@ -107,6 +110,16 @@ const Login = () => {
             )}
           </button>
         </form>
+
+        <a
+          href={GITHUB_REPO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn-secondary w-full flex items-center justify-center gap-2 mt-4"
+        >
+          <Github className="w-5 h-5" />
+          View on GitHub
+        </a>
       </div>
     </div>
   );
